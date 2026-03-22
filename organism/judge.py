@@ -274,6 +274,7 @@ def _build_judge_prompt(
     summaries: Dict[str, Dict[str, str]],
     main_tension: str,
     recent_winners: List[str],
+    disable_antistagnation: bool = False,
 ) -> str:
     """Prompt pour le juge. Les résumés sont déjà anonymisés (clés = '1','2','3').
 
@@ -289,7 +290,9 @@ def _build_judge_prompt(
 
     # Anti-stagnation note (anonyme — pas de noms d'agents)
     dominance_note = ""
-    if len(recent_winners) >= 5:
+    if disable_antistagnation:
+        pass  # Skip anti-stagnation entirely for controlled bench
+    elif len(recent_winners) >= 5:
         from collections import Counter
         counts = Counter(recent_winners[-10:])
         _, top_count = counts.most_common(1)[0]
@@ -497,10 +500,14 @@ class JudgePipeline:
         self,
         summarizer_model: Optional[str] = None,
         judge_model: Optional[str] = None,
+        fixed_temperature: Optional[float] = None,
+        disable_antistagnation: bool = False,
     ):
         self._summarizer_model = summarizer_model or _SUMMARIZER_MODEL
         self._judge_model = judge_model or _JUDGE_MODEL
-        self._judge_temp = _JUDGE_TEMP
+        self._judge_temp = fixed_temperature if fixed_temperature is not None else _JUDGE_TEMP
+        self._fixed_temperature = fixed_temperature
+        self._disable_antistagnation = disable_antistagnation
         self._call_count = 0
         self._valid_json_count = 0
         self._temp_history: List[float] = []
@@ -665,6 +672,8 @@ class JudgePipeline:
 
         Retourne la nouvelle température.
         """
+        if self._fixed_temperature is not None:
+            return self._judge_temp  # Fixed temperature — no adaptation
         if len(recent_margins) < 5:
             return self._judge_temp  # Pas assez de données
 
@@ -749,7 +758,8 @@ class JudgePipeline:
         valid_agents: List[str],
     ) -> Optional[JudgeVerdict]:
         """Appelle le juge 8B local."""
-        prompt = _build_judge_prompt(summaries, main_tension, recent_winners)
+        prompt = _build_judge_prompt(summaries, main_tension, recent_winners,
+                                     disable_antistagnation=self._disable_antistagnation)
         t0 = time.monotonic()
 
         try:

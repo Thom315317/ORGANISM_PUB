@@ -23,7 +23,7 @@ import ollama
 log = logging.getLogger("organism_v2.perturbation")
 
 # Model used for all perturbation transforms
-_PERTURBATION_MODEL = "gpt-oss:120b-cloud"
+_PERTURBATION_MODEL = "minimax-m2.7:cloud"
 
 # File-based perturbation cache
 _cache: Optional[dict] = None
@@ -69,7 +69,7 @@ def _call_llm(instruction: str, draft_text: str, condition: str = "", tick: int 
         resp = ollama.chat(
             model=_PERTURBATION_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.0, "num_predict": 1500},
+            options={"temperature": 0.0, "num_predict": 1500, "num_ctx": 32768},
         )
         content = resp.get("message", {}).get("content", "")
         content = re.sub(
@@ -127,6 +127,14 @@ PERTURBATION_SCHEDULE = {
         35: inversion,
     },
     "E": {
+        15: compression,
+        35: inversion,
+    },
+    "E_B": {
+        15: compression,
+        35: inversion,
+    },
+    "E_C": {
         15: compression,
         35: inversion,
     },

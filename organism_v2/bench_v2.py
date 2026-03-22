@@ -97,7 +97,7 @@ log = logging.getLogger("bench_v2")
 
 DEFAULT_TICKS = 50
 DEFAULT_SEEDS = [42, 123, 456]
-CONDITIONS = ["A", "B", "C", "E", "R", "F"]
+CONDITIONS = ["A", "B", "C", "E", "E_B", "E_C", "R", "F"]
 WARMUP_TICKS = 5  # Exclude ticks 1-5 from downstream (flagged, not skipped)
 
 # User injections — same as Organism 1 for comparability
@@ -111,11 +111,42 @@ DEFAULT_INJECTIONS: Dict[int, str] = {
 
 _MAX_CONSECUTIVE_FAILURES = 5
 
+class NoLLMSingleDraftJudge:
+    """Single-agent judge: no LLM call, winner assigned automatically with heuristic signals."""
+    def evaluate(self, agent_turns, recent_winners=None):
+        draft = None
+        for t in agent_turns:
+            if t.text and t.text.strip():
+                draft = t
+                break
+        if not draft:
+            return None
+        aid = draft.agent.value if hasattr(draft.agent, "value") else str(draft.agent)
+        signals = {
+            "novelty": getattr(draft, "novelty", 0.5),
+            "conflict": 0.0,
+            "cohesion": 1.0,
+            "impl_pressure": getattr(draft, "impl_pressure", 0.5),
+        }
+        return JudgeVerdict(
+            winner=aid,
+            reason="single_agent_auto",
+            confidence=1.0,
+            signals=signals,
+            claims=(),
+            competition=CompetitionPattern(
+                ranking=(aid,), margin_1v2=1.0, margin_2v3=0.0,
+                counterfactual="single_agent",
+            ),
+        )
+
 CONDITION_DESCRIPTIONS = {
     "A": "standard multi-agent pipeline, no perturbation — baseline",
     "B": "multi-agent + neutral perturbation (rephrase) at t15/t35 — controls for injection effect",
     "C": "multi-agent + strong perturbation (compression/inversion) at t15/t35 — measures resilience",
-    "E": "single-agent + strong perturbation — controls for multi-agent contribution vs single-agent pipeline. Does not isolate model-without-arbiter — SingleDraftJudge is active.",
+    "E": "single-agent (glm-5:cloud, slot A) + strong perturbation + no-LLM judge — controls for multi-agent contribution.",
+    "E_B": "single-agent (kimi-k2.5:cloud, slot B) + strong perturbation + no-LLM judge — controls for model size bias.",
+    "E_C": "single-agent (qwen3.5:122b-cloud, slot C) + strong perturbation + no-LLM judge — completes single-agent control triad.",
     "R": "multi-agent + strong perturbation + random winner — isolates geometric smoothing (barycentre effect) from competitive selection. If C > R on sim_curves, selection contributes beyond averaging.",
     "F": "multi-agent + competitive judge + 4× strong perturbation (t10/t20/t30/t40) — tests repeated recovery capacity and breaking point under sustained perturbation.",
 }
@@ -153,8 +184,30 @@ def run_single(
     wm = WorldModel(mr=mr)
 
     # ── Agent function ──
-    is_single = condition == "E"
-    if is_single:
+    is_single = condition in ("E", "E_B", "E_C")
+    if is_single and condition == "E_C":
+        single_model = "C"
+        target = AgentId[single_model]
+        if not dry_mode:
+            from organism.agent_wrapper import OllamaAgentFn
+            single_configs = {single_model: dict(MODEL_CONFIGS[single_model])}
+            agent_fn = _make_single_agent_fn(
+                OllamaAgentFn(agent_configs=single_configs), target
+            )
+        else:
+            agent_fn = _make_single_agent_fn(dry_agent_fn, target)
+    elif is_single and condition == "E_B":
+        single_model = "B"
+        target = AgentId[single_model]
+        if not dry_mode:
+            from organism.agent_wrapper import OllamaAgentFn
+            single_configs = {single_model: dict(MODEL_CONFIGS[single_model])}
+            agent_fn = _make_single_agent_fn(
+                OllamaAgentFn(agent_configs=single_configs), target
+            )
+        else:
+            agent_fn = _make_single_agent_fn(dry_agent_fn, target)
+    elif is_single:
         single_model = "A"  # Use Agent A for single condition
         target = AgentId[single_model]
         if not dry_mode:
@@ -175,16 +228,16 @@ def run_single(
     # ── Judge ──
     judge_pipeline = None
     if is_single:
-        if not dry_mode:
-            sdj = SingleDraftJudge()
-            if judge_model:
-                sdj._JUDGE_MODEL = judge_model
-            judge_pipeline = sdj
+        judge_pipeline = NoLLMSingleDraftJudge()
     elif condition == "R":
         if not dry_mode:
             try:
                 from organism.judge import JudgePipeline
-                real_judge = JudgePipeline(judge_model=judge_model)
+                real_judge = JudgePipeline(
+                    judge_model=judge_model,
+                    fixed_temperature=0.5,
+                    disable_antistagnation=True,
+                )
                 judge_pipeline = RandomJudge(real_pipeline=real_judge)
             except Exception as exc:
                 log.warning("[%s] JudgePipeline unavailable for RandomJudge: %s", run_id, exc)
@@ -192,7 +245,11 @@ def run_single(
         if not dry_mode:
             try:
                 from organism.judge import JudgePipeline
-                judge_pipeline = JudgePipeline(judge_model=judge_model)
+                judge_pipeline = JudgePipeline(
+                    judge_model=judge_model,
+                    fixed_temperature=0.5,
+                    disable_antistagnation=True,
+                )
             except Exception as exc:
                 log.warning("[%s] JudgePipeline unavailable: %s", run_id, exc)
 
@@ -329,7 +386,15 @@ def run_single(
 
     # ── Build output ──
     metrics_dict = metrics.to_dict()
+    judge_temp_hist = None
+    if hasattr(orch, '_judge') and orch._judge and hasattr(orch._judge, '_temp_history'):
+        judge_temp_hist = orch._judge._temp_history
+    elif hasattr(orch, '_judge') and orch._judge and hasattr(orch._judge, '_real'):
+        # RandomJudge wraps real pipeline
+        if hasattr(orch._judge._real, '_temp_history'):
+            judge_temp_hist = orch._judge._real._temp_history
     output = {
+        "bench_version": "v3",
         "condition": condition,
         "condition_description": CONDITION_DESCRIPTIONS.get(condition, ""),
         "seed": seed,
@@ -338,6 +403,18 @@ def run_single(
         "perturbation_log": perturbation_log,
         **metrics_dict,
         "sim_curves": sim_curves,
+        "judge_temp_history": judge_temp_hist,
+        "analysis_notes": {
+            "draft_velocity_C_vs_R": "NOT directly comparable — reflects random winner switches in R vs coherent winner sequence in C.",
+            "PSV_C_vs_R": "Same limitation as draft_velocity.",
+            "winner_L0R_feedback": "By design: winning draft propagates at salience=1.0. In C = best draft, in R = random draft. This is the mechanism under study, not a confound.",
+            "sv_selected_C_vs_R": "Winner-dependent. Valid for comparison but account for structural difference in winner sequences.",
+            "antistagnation": "Disabled for all conditions in bench_v3.",
+            "judge_temperature": "Fixed at 0.5 for all conditions in bench_v3.",
+            "num_ctx": "32768 for all models in bench_v3.",
+            "summarizer_model": "nemotron-3-super:cloud (NVIDIA, family distinct from all agents).",
+            "perturbation_model": "minimax-m2.7:cloud (MiniMax, family distinct from all agents and judge).",
+        },
     }
 
     # ── Save ──
@@ -369,8 +446,10 @@ def main():
                         help="10 ticks, dry mode (no LLM)")
     parser.add_argument("--judge-model", type=str, default=None,
                         help="Override judge model")
-    parser.add_argument("--skip-existing", action="store_true",
-                        help="Skip runs whose results.json already has total_ticks reached")
+    parser.add_argument("--skip-existing", action="store_true", default=True,
+                        help="Skip runs whose results.json already has total_ticks reached (default: ON)")
+    parser.add_argument("--force-rerun", action="store_true",
+                        help="Force rerun even if results.json already complete (overrides --skip-existing)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -435,7 +514,7 @@ def main():
             run_id = f"{condition}_seed{seed}"
 
             # --skip-existing: skip runs already completed
-            if args.skip_existing:
+            if args.skip_existing and not args.force_rerun:
                 existing = output_dir / run_id / "results.json"
                 if existing.exists():
                     try:
