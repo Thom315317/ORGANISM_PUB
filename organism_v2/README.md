@@ -2,31 +2,57 @@
 
 ## Bench (`bench_v2.py`)
 
-Runs 7 conditions × 6 seeds × 50 ticks = 42 runs.
+Runs 7 conditions x N seeds x 80 ticks.
 
 | Condition | Description |
 |-----------|-------------|
 | A | Multi-agent, no perturbation — baseline |
 | B | Multi-agent + neutral perturbation (rephrase) at t15/t35 |
 | C | Multi-agent + strong perturbation (compression t15, inversion t35) |
-| E | Single-agent A (glm-5:cloud) + strong perturbation + no-LLM judge |
+| E | Single-agent A (minimax-m2.7:cloud) + strong perturbation + no-LLM judge |
 | E_B | Single-agent B (kimi-k2.5:cloud) + strong perturbation + no-LLM judge |
-| E_C | Single-agent C (qwen3.5:397b-cloud) + strong perturbation + no-LLM judge |
+| E_C | Single-agent C (glm-5:cloud) + strong perturbation + no-LLM judge |
 | R | Multi-agent + random winner + strong perturbation — isolates selection from averaging |
 
-### Bench V3 audit fixes
+### Bench V4 changes
+
+- **think=False for all LLM calls**: agents, judge, perturbation. No thinking mode.
+- **strip_thinking() pipeline**: safety net — strips residual reasoning traces before judge/embeddings/L0R. Thinking text preserved in events.jsonl for audit.
+- **Draft discard**: drafts <20 chars post-strip treated as forfeit (thinking_only). Agent skips tick, not sent to judge. Logged in `discarded_drafts` field.
+- **Summarizer disabled**: judge receives raw drafts directly (num_ctx=131072 sufficient). Nemotron code preserved but bypassed via `disable_summarizer=True`.
+- **num_predict=1500 agents, 4000 judge**. num_ctx=65536 agents, 131072 judge.
+- **80 ticks per run** (was 50). Injection at t42 removed. 4 standard injections remain (t2, t12, t22, t32).
+- **bench_version=v4**, output directory bench_v4.
+- **Condition F removed**: 7 conditions remain (A, B, C, E, E_B, E_C, R).
+- **k_max=44** for sim_curves computation (was 30).
+- **Perturbation model**: gpt-oss:120b-cloud, num_predict=3000, num_ctx=65536, think=False. Neutral prompt includes length constraint.
+- **System prompts**: competitive debate framing, sanctions for non-conforming responses (identical block for A/B/C).
+- **_anon_map** in tick_end events for anonymization audit.
+- **Anonymization confirmed**: all judge prompts use numeric labels (1/2/3).
+
+### Model lineup (bench V4)
+
+| Role | Model | Family |
+|------|-------|--------|
+| Agent A | minimax-m2.7:cloud | MiniMax |
+| Agent B | kimi-k2.5:cloud | Moonshot |
+| Agent C | glm-5:cloud | Zhipu |
+| Judge | gemini-3-flash-preview:cloud | Google |
+| Perturbation | gpt-oss:120b-cloud | OpenAI-oss |
+
+5 distinct families. No shared weights or architecture.
+
+### Bench V3 audit fixes (retained)
 
 - Judge temperature fixed at 0.5 (no adaptive drift)
 - Anti-stagnation disabled for all conditions
-- num_ctx=32768 for all models
 - SingleDraftJudge replaced by NoLLMSingleDraftJudge (no LLM call)
-- All model families distinct across roles
 - judge_temp_history and analysis_notes in output JSON
 
 ### Tick indexing convention
 
-- `bench loop`: `tick in range(total_ticks)` → **0-indexed** (0 to 49)
-- `orchestrator`: `self._tick_id` → **1-indexed** (1 to 50)
+- `bench loop`: `tick in range(total_ticks)` → **0-indexed** (0 to 79)
+- `orchestrator`: `self._tick_id` → **1-indexed** (1 to 80)
 - `perturbation_log["tick"]` → 0-indexed (bench loop)
 - `events.jsonl tick_id` → 1-indexed (orchestrator)
 - `sim_curves` keys (`"tick_15"`, `"tick_35"`) → 0-indexed (bench loop)
@@ -35,13 +61,12 @@ Runs 7 conditions × 6 seeds × 50 ticks = 42 runs.
 ### Usage
 
 ```bash
-# Full bench V3 (42 runs)
+# Full bench V4 (21 runs, 80 ticks each)
 python organism_v2/bench_v2.py --conditions A,B,C,E,E_B,E_C,R \
-  --seeds 42,123,456,7,77,777 --ticks 50 --output-dir runs/bench_v3/
+  --seeds 42,123,456 --ticks 80
 
 # Dry-run
-python organism_v2/bench_v2.py --dry-run --conditions A,C,E,R --seeds 42 \
-  --output-dir runs/bench_v3/
+python organism_v2/bench_v2.py --dry-run --conditions A,C,E,R --seeds 42
 ```
 
 ## Viewer (`viewer_v3.py`)
@@ -49,7 +74,7 @@ python organism_v2/bench_v2.py --dry-run --conditions A,C,E,R --seeds 42 \
 Flask + Three.js 3D trajectory viewer.
 
 ```bash
-python organism_v2/viewer_v3.py --runs-dir runs/bench_v3/ --port 8767
+python organism_v2/viewer_v3.py --runs-dir runs/bench_v4/ --port 8767
 ```
 
 Features: PCA/UMAP/DIST-3D projection, connectome, metric coloring, trail fading, distance matrix, mouse controls (drag=rotate, wheel=zoom), Mean-Selected gap indicator.

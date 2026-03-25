@@ -196,16 +196,14 @@ def _ollama_chat_smart(
         kwargs = dict(
             model=model, messages=messages, options=options,
             keep_alive=keep_alive,
+            think=False,
         )
         if use_format:
             kwargs["format"] = "json"
-        if use_think:
-            kwargs["think"] = True
         return ollama.chat(**kwargs)
 
-    # Phase de découverte : tester les combinaisons
+    # Phase de découverte : tester les combinaisons (think=False enforced)
     combos = [
-        (True, True, "think+json"),
         (False, True, "json only"),
         (False, False, "free text"),
     ]
@@ -502,12 +500,14 @@ class JudgePipeline:
         judge_model: Optional[str] = None,
         fixed_temperature: Optional[float] = None,
         disable_antistagnation: bool = False,
+        disable_summarizer: bool = False,
     ):
         self._summarizer_model = summarizer_model or _SUMMARIZER_MODEL
         self._judge_model = judge_model or _JUDGE_MODEL
         self._judge_temp = fixed_temperature if fixed_temperature is not None else _JUDGE_TEMP
         self._fixed_temperature = fixed_temperature
         self._disable_antistagnation = disable_antistagnation
+        self._disable_summarizer = disable_summarizer
         self._call_count = 0
         self._valid_json_count = 0
         self._temp_history: List[float] = []
@@ -588,14 +588,28 @@ class JudgePipeline:
         anon_drafts = {real_to_anon[aid]: text for aid, text in drafts.items()}
 
         # Step 1: Summarizer (receives anonymous drafts)
-        summaries, main_tension = self._call_summarizer(anon_drafts)
-        if not summaries:
-            log.warning("Summarizer failed, using raw drafts as summaries")
+        if self._disable_summarizer:
+            log.info("Summarizer disabled — passing raw drafts to judge")
             summaries = {
-                label: {"summary": text[:100], "safety": "GO"}
+                label: {"summary": text, "safety": "GO"}
                 for label, text in anon_drafts.items()
             }
             main_tension = ""
+        else:
+            summaries, main_tension = self._call_summarizer(anon_drafts)
+            if not summaries:
+                log.warning("Summarizer failed, using raw drafts as summaries")
+                summaries = {
+                    label: {"summary": text[:100], "safety": "GO"}
+                    for label, text in anon_drafts.items()
+                }
+                main_tension = ""
+
+        # Normalize summaries: ensure each value is a dict with "summary" and "safety"
+        for label in list(summaries.keys()):
+            s = summaries[label]
+            if isinstance(s, str):
+                summaries[label] = {"summary": s[:100], "safety": "GO"}
 
         for label, s in summaries.items():
             if s.get("safety", "GO").upper().startswith("VETO"):
@@ -741,7 +755,13 @@ class JudgePipeline:
                 data = _extract_json(raw)
 
             if data and "summaries" in data:
-                return data["summaries"], data.get("main_tension", "")
+                sums = data["summaries"]
+                # Normalize keys: "draft_1" → "1", "draft_2" → "2", etc.
+                normalized = {}
+                for k, v in sums.items():
+                    clean_key = k.replace("draft_", "").replace("Draft_", "").replace("Draft ", "").strip()
+                    normalized[clean_key] = v
+                return normalized, data.get("main_tension", "")
             log.warning("Summarizer JSON invalid: content=%s thinking=%s",
                         content[:100], thinking[:100])
             return None, ""

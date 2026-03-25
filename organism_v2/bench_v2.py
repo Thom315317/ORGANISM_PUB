@@ -41,7 +41,7 @@ KNOWN LIMITATIONS
       (architectural artifact, not a quality signal).
     - condition E: sv_mean == sv_selected by construction
       (single agent, no averaging).
-    - DEFAULT_INJECTIONS (ticks 2,12,22,32,42) applied to all
+    - DEFAULT_INJECTIONS (ticks 2,12,22,32) applied to all
       conditions for comparability.
     - condition F tick 10: R_pre computed from ticks 7,8,9
       (immediately post-warmup — note in Methods).
@@ -95,9 +95,9 @@ log = logging.getLogger("bench_v2")
 
 # ── Constants ──────────────────────────────────────────────────────
 
-DEFAULT_TICKS = 50
+DEFAULT_TICKS = 80
 DEFAULT_SEEDS = [42, 123, 456]
-CONDITIONS = ["A", "B", "C", "E", "E_B", "E_C", "R", "F"]
+CONDITIONS = ["A", "B", "C", "E", "E_B", "E_C", "R"]
 WARMUP_TICKS = 5  # Exclude ticks 1-5 from downstream (flagged, not skipped)
 
 # User injections — same as Organism 1 for comparability
@@ -106,7 +106,6 @@ DEFAULT_INJECTIONS: Dict[int, str] = {
     12: "Qu'est-ce que la conscience ?",
     22: "Comparez Bach et Mozart",
     32: "Comment fonctionne la memoire humaine ?",
-    42: "Quel est le role de l'art dans la societe ?",
 }
 
 _MAX_CONSECUTIVE_FAILURES = 5
@@ -146,7 +145,7 @@ CONDITION_DESCRIPTIONS = {
     "C": "multi-agent + strong perturbation (compression/inversion) at t15/t35 — measures resilience",
     "E": "single-agent (glm-5:cloud, slot A) + strong perturbation + no-LLM judge — controls for multi-agent contribution.",
     "E_B": "single-agent (kimi-k2.5:cloud, slot B) + strong perturbation + no-LLM judge — controls for model size bias.",
-    "E_C": "single-agent (qwen3.5:122b-cloud, slot C) + strong perturbation + no-LLM judge — completes single-agent control triad.",
+    "E_C": "single-agent (qwen3.5:397b-cloud, slot C) + strong perturbation + no-LLM judge — completes single-agent control triad.",
     "R": "multi-agent + strong perturbation + random winner — isolates geometric smoothing (barycentre effect) from competitive selection. If C > R on sim_curves, selection contributes beyond averaging.",
     "F": "multi-agent + competitive judge + 4× strong perturbation (t10/t20/t30/t40) — tests repeated recovery capacity and breaking point under sustained perturbation.",
 }
@@ -237,6 +236,7 @@ def run_single(
                     judge_model=judge_model,
                     fixed_temperature=0.5,
                     disable_antistagnation=True,
+                    disable_summarizer=True,
                 )
                 judge_pipeline = RandomJudge(real_pipeline=real_judge)
             except Exception as exc:
@@ -249,6 +249,7 @@ def run_single(
                     judge_model=judge_model,
                     fixed_temperature=0.5,
                     disable_antistagnation=True,
+                    disable_summarizer=True,
                 )
             except Exception as exc:
                 log.warning("[%s] JudgePipeline unavailable: %s", run_id, exc)
@@ -382,7 +383,7 @@ def run_single(
 
     # ── Compute sim_curves ──
     perturbation_ticks = [p["tick"] for p in perturbation_log]
-    sim_curves = metrics.compute_sim_curves(perturbation_ticks) if perturbation_ticks else None
+    sim_curves = metrics.compute_sim_curves(perturbation_ticks, k_max=44) if perturbation_ticks else None
 
     # ── Build output ──
     metrics_dict = metrics.to_dict()
@@ -394,13 +395,14 @@ def run_single(
         if hasattr(orch._judge._real, '_temp_history'):
             judge_temp_hist = orch._judge._real._temp_history
     output = {
-        "bench_version": "v3",
+        "bench_version": "v4",
         "condition": condition,
         "condition_description": CONDITION_DESCRIPTIONS.get(condition, ""),
         "seed": seed,
         "total_ticks": total_ticks,
         "warmup_ticks": WARMUP_TICKS,
         "perturbation_log": perturbation_log,
+        "discarded_drafts": getattr(orch, '_discarded_drafts', []),
         **metrics_dict,
         "sim_curves": sim_curves,
         "judge_temp_history": judge_temp_hist,
@@ -409,9 +411,12 @@ def run_single(
             "PSV_C_vs_R": "Same limitation as draft_velocity.",
             "winner_L0R_feedback": "By design: winning draft propagates at salience=1.0. In C = best draft, in R = random draft. This is the mechanism under study, not a confound.",
             "sv_selected_C_vs_R": "Winner-dependent. Valid for comparison but account for structural difference in winner sequences.",
-            "antistagnation": "Disabled for all conditions in bench_v3.",
-            "judge_temperature": "Fixed at 0.5 for all conditions in bench_v3.",
-            "num_ctx": "32768 for all models in bench_v3.",
+            "antistagnation": "Disabled for all conditions in bench_v4.",
+            "judge_temperature": "Fixed at 0.5 for all conditions in bench_v4.",
+            "num_ctx": "65536 agents / 131072 judge in bench_v4.",
+            "strip_thinking": "Applied to all agent drafts before judge/embedding/L0R.",
+            "num_predict": "1500 for agents, 4000 for judge/summarizer in bench_v4.",
+            "discarded_drafts": "Drafts <20 chars post-strip treated as forfeit (thinking_only). Agent skips tick, not sent to judge.",
             "summarizer_model": "nemotron-3-super:cloud (NVIDIA, family distinct from all agents).",
             "perturbation_model": "minimax-m2.7:cloud (MiniMax, family distinct from all agents and judge).",
         },
@@ -477,7 +482,7 @@ def main():
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = PROJECT_ROOT / "runs" / "bench_v2"
+        output_dir = PROJECT_ROOT / "runs" / "bench_v4"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Preflight

@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any
 
@@ -124,6 +125,8 @@ class AgentTurn:
     empty_retry: bool = False
     # Mr chunk_id (rempli par l'orchestrateur après log)
     chunk_id: str = ""
+    # Thinking text (séparé du content par think=True)
+    thinking_text: str = ""
 
 
 @dataclass
@@ -149,6 +152,63 @@ class TickResult:
 # Type du callable agent
 # fn(agent_id, prompt, params) → AgentTurn
 AgentFn = Callable[[AgentId, str, AgentParams], AgentTurn]
+
+
+# ── Strip thinking traces from agent output ──────────────────────
+_THINKING_MARKERS = [
+    'thinking process', 'my approach', 'let me think',
+    'i need to', 'step 1', 'analyze the request',
+    'planning:', 'analysis:', '**analyze', '**determine',
+    '**formulate', '**evaluate', 'constraint:', 'context:',
+    'role:', 'task:',
+]
+
+
+def strip_thinking(text: str) -> str:
+    """Remove reasoning traces from agent output.
+
+    Conservative approach:
+    1. Remove tagged thinking blocks (<think>...</think>)
+    2. Remove plain-text thinking blocks at the START of the response
+       (identified by known headers, ending at first non-thinking paragraph)
+    3. Safety: if we removed >90% of text, still return stripped version
+    """
+    if not text:
+        return text
+
+    original_len = len(text)
+
+    # Layer 1: Tagged thinking (safest — clean delimiters)
+    text = re.sub(
+        r'<(?:think|thinking)>.*?</(?:think|thinking)>',
+        '', text, flags=re.DOTALL,
+    )
+
+    # Layer 2: Plain-text thinking at START of response
+    paragraphs = text.split('\n\n')
+    content_start = 0
+
+    for i, para in enumerate(paragraphs):
+        para_lower = para.lower().strip()
+        is_thinking = any(marker in para_lower for marker in _THINKING_MARKERS)
+        if is_thinking:
+            content_start = i + 1
+        else:
+            break  # First non-thinking paragraph → stop stripping
+
+    if content_start > 0 and content_start < len(paragraphs):
+        text = '\n\n'.join(paragraphs[content_start:])
+    elif content_start >= len(paragraphs):
+        # Everything was thinking — no real content exists
+        text = ''
+
+    text = text.strip()
+
+    # Safety: if we removed more than 90%, the draft was genuinely all thinking
+    if len(text) < original_len * 0.1 and original_len > 100:
+        return text  # Still return stripped
+
+    return text
 
 
 # ── Veto Budget ──────────────────────────────────────────────────
@@ -249,6 +309,7 @@ class Orchestrator:
         self._user_messages: List[str] = []  # File de messages utilisateur
         self._recent_winners: List[str] = []  # Historique des gagnants pour le judge
         self._recent_margins: List[float] = []  # Historique margin_1v2
+        self._discarded_drafts: List[dict] = []  # Drafts forfaits (thinking_only)
         self._prev_signals: Optional[ControlSignals] = None
         self._prev_mode: Optional[Mode] = None
         self._signal_history: List[ControlSignals] = []  # fenêtre pour prediction_error
@@ -379,9 +440,35 @@ class Orchestrator:
                 conflict=turn.conflict,
                 cohesion=turn.cohesion,
                 impl_pressure=turn.impl_pressure,
-                payload={"text": turn.text[:1500]} if turn.text else None,
+                payload={
+                    "text": turn.text[:1500],
+                    **({"thinking_text": turn.thinking_text[:2000]} if turn.thinking_text else {}),
+                } if turn.text else None,
             )
             turn.chunk_id = event.chunk_id
+
+            # Strip thinking traces — events.jsonl already has the raw text
+            raw_len = len(turn.text) if turn.text else 0
+            if turn.text:
+                turn.text = strip_thinking(turn.text)
+
+            # Discard drafts that are pure thinking (no real content)
+            if not turn.text or len(turn.text.strip()) < 20:
+                aid_str = agent_id.value if hasattr(agent_id, "value") else str(agent_id)
+                log.warning("[tick %d] %s draft discarded (thinking_only, raw=%d chars)",
+                            self._tick_id, aid_str, raw_len)
+                self._mr.append(
+                    event_type=EventType.AGENT_MESSAGE,
+                    tick_id=self._tick_id,
+                    agent=agent_id,
+                    mode=mode.value,
+                    payload={"type": "draft_discarded", "reason": "thinking_only",
+                             "raw_length": raw_len},
+                )
+                self._discarded_drafts.append({
+                    "tick": self._tick_id, "agent": aid_str, "reason": "thinking_only",
+                })
+                continue  # Skip L0R, claims, judge — agent forfeits this tick
 
             # Insérer dans L0R
             if turn.text:
@@ -707,6 +794,8 @@ class Orchestrator:
                 "expired_slots": expired,
                 "judge_winner": judge_verdict.winner if judge_verdict else None,
                 "judge_confidence": judge_verdict.confidence if judge_verdict else None,
+                "_anon_map": judge_verdict.raw_json.get("_anon_map") if judge_verdict and judge_verdict.raw_json else None,
+                "_anon_reverse": judge_verdict.raw_json.get("_anon_reverse") if judge_verdict and judge_verdict.raw_json else None,
             },
         )
 

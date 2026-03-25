@@ -23,7 +23,7 @@ import ollama
 log = logging.getLogger("organism_v2.perturbation")
 
 # Model used for all perturbation transforms
-_PERTURBATION_MODEL = "minimax-m2.7:cloud"
+_PERTURBATION_MODEL = "gpt-oss:120b-cloud"
 
 # File-based perturbation cache
 _cache: Optional[dict] = None
@@ -69,7 +69,8 @@ def _call_llm(instruction: str, draft_text: str, condition: str = "", tick: int 
         resp = ollama.chat(
             model=_PERTURBATION_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.0, "num_predict": 1500, "num_ctx": 32768},
+            options={"temperature": 0.0, "num_predict": 3000, "num_ctx": 65536},  # explicit — not read from cristal.json
+            think=False,
         )
         content = resp.get("message", {}).get("content", "")
         content = re.sub(
@@ -94,7 +95,9 @@ def neutral(draft_text: str, condition: str = "", tick: int = -1) -> str:
     """Neutral perturbation: reformulate without changing content."""
     return _call_llm(
         "Reformulate the following text using different words and sentence structure. "
-        "Do not add, remove, or modify any factual claim, argument, or conclusion.",
+        "Do not add, remove, or modify any factual claim, argument, or conclusion. "
+        "Your output MUST be approximately the same length as the input. "
+        "Do NOT summarize or shorten.",
         draft_text, condition=condition, tick=tick,
     )
 

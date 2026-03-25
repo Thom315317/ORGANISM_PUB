@@ -49,28 +49,47 @@ _OPPOSE_INSTRUCTION = (
 # Règle critique : PAS de mention de CRISTAL, Organisme, Agent A/B/C,
 # Explorer/Critic/Builder, multi-agent, délibération.
 
+_RULES_BLOCK = (
+    "\n\n---\n"
+    "CONTEXTE DU SYSTÈME :\n"
+    "Tu participes à un débat compétitif. À chaque tour, un juge indépendant "
+    "évalue les arguments de tous les participants et sélectionne le meilleur. "
+    "L'argument sélectionné influence la suite du débat. Les arguments non "
+    "sélectionnés sont écartés. C'est de la sélection naturelle : seuls les "
+    "arguments les plus pertinents survivent.\n\n"
+    "RÈGLES :\n"
+    "- Ta réponse DOIT être uniquement en français. Jamais d'anglais.\n"
+    "- Réponds en 3 à 5 phrases, sauf si le sujet mérite davantage de "
+    "profondeur — dans ce cas, développe mais reste concis.\n"
+    "- Ne décris jamais ton rôle. Pas de listes numérotées.\n"
+    "- Raisonne autant que tu veux en interne, mais n'affiche QUE ton "
+    "argument final. Pas de \"Thinking Process\", pas de notes internes.\n"
+    "- Ton budget total (raisonnement + réponse) est de 1500 tokens. "
+    "Gère-le.\n"
+    "- Toute réponse qui contient du raisonnement interne visible, qui "
+    "n'est pas en français, ou qui ne respecte pas ces règles sera "
+    "considérée comme vide par le système : tu perds ton tour, ton "
+    "argument n'est ni lu ni évalué par le juge, et tu n'influences "
+    "pas le débat.\n"
+    "---"
+)
+
 SYSTEM_PROMPTS = {
     "A": (
         "Tu es un penseur créatif et audacieux. Ose les connexions inattendues, "
         "les analogies surprenantes, les hypothèses risquées.\n"
-        "Ton originalité est ta force — ne cherche pas à être « correct », cherche à être stimulant.\n"
-        "IMPORTANT : Réponds UNIQUEMENT en français. Jamais d'anglais.\n"
-        "Ne décris jamais ton rôle. Pas de listes numérotées.\n"
-        "Pense directement, en phrases naturelles. 3-5 phrases percutantes."
+        "Ton originalité est ta force — ne cherche pas à être « correct », cherche à être stimulant."
+        + _RULES_BLOCK
     ),
     "B": (
         "Tu es un analyste incisif. Tu vas droit au cœur du problème.\n"
-        "Identifie LA faille centrale ou LE point fort décisif. Pas de préambule.\n"
-        "IMPORTANT : Réponds UNIQUEMENT en français. Jamais d'anglais.\n"
-        "Ne décris jamais ton rôle. Pas de listes numérotées.\n"
-        "3-5 phrases tranchantes. Chaque phrase doit apporter quelque chose."
+        "Identifie LA faille centrale ou LE point fort décisif. Pas de préambule."
+        + _RULES_BLOCK
     ),
     "C": (
         "Tu es un penseur pragmatique. Tu transformes les idées en quelque chose d'actionnable.\n"
-        "Mais attention : propose aussi tes propres idées, pas seulement des synthèses.\n"
-        "IMPORTANT : Réponds UNIQUEMENT en français. Jamais d'anglais.\n"
-        "Ne décris jamais ton rôle. Pas de listes numérotées.\n"
-        "Pense directement, en phrases naturelles. 3-5 phrases concrètes."
+        "Mais attention : propose aussi tes propres idées, pas seulement des synthèses."
+        + _RULES_BLOCK
     ),
 }
 
@@ -127,13 +146,12 @@ def _sanitize_output(text: str) -> str:
 _THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
-def _extract_content(response: Any) -> str:
-    """Extrait le texte d'une réponse ollama — content prioritaire.
+def _extract_content_and_thinking(response: Any) -> tuple:
+    """Extrait content et thinking séparément d'une réponse ollama.
 
-    Stratégie : quand le content est substantiel (>50 chars), on
-    l'utilise seul. Sinon, on fusionne thinking + content.
-    Cela évite que le thinking en anglais / meta-analyse pollue
-    la sortie visible pour les modèles comme GLM.
+    Returns (content: str, thinking: str).
+    Content = réponse finale uniquement (ce qui va au juge/embeddings/L0R).
+    Thinking = raisonnement interne (pour audit dans events.jsonl).
     """
     msg = response["message"] if isinstance(response, dict) else response.message
     if hasattr(msg, "model_dump"):
@@ -145,23 +163,23 @@ def _extract_content(response: Any) -> str:
     content = (msg_dict.get("content", "") or "").strip()
     thinking = (msg_dict.get("thinking", "") or "").strip()
     # Extraire les balises <think> inline du content
-    think_inline = ""
     think_match = _THINK_TAG_RE.search(content)
     if think_match:
         think_inline = think_match.group(1).strip()
         content = _THINK_TAG_RE.sub("", content).strip()
-    # Si content est substantiel, l'utiliser seul
-    if content and len(content) > 50:
-        return content
-    # Sinon, fusionner toutes les sources
-    parts = []
-    if thinking:
-        parts.append(thinking)
-    if think_inline:
-        parts.append(think_inline)
-    if content:
-        parts.append(content)
-    return "\n".join(parts)
+        if think_inline:
+            thinking = (thinking + "\n" + think_inline).strip() if thinking else think_inline
+    # Si content is empty but thinking exists, use thinking as fallback
+    if not content and thinking:
+        content = thinking
+        thinking = ""
+    return content, thinking
+
+
+def _extract_content(response: Any) -> str:
+    """Legacy wrapper — returns content only."""
+    content, _ = _extract_content_and_thinking(response)
+    return content
 
 
 def _estimate_signals_from_text(text: str, status: AgentStatus) -> Dict[str, float]:
@@ -251,8 +269,9 @@ class OllamaAgentFn:
         )
 
         t0 = time.monotonic()
+        thinking_text = ""
         try:
-            raw_text = self._call_ollama(
+            raw_text, thinking_text = self._call_ollama(
                 model, full_prompt, temperature, num_ctx,
                 num_predict=num_predict, repeat_penalty=repeat_penalty,
                 agent_id=agent_id.value,
@@ -277,7 +296,7 @@ class OllamaAgentFn:
                 + "\n\nReponds avec au moins 1 phrase courte."
             )
             try:
-                raw_text = self._call_ollama(
+                raw_text, thinking_text = self._call_ollama(
                     model, retry_prompt, 0.4, num_ctx,
                     num_predict=num_predict, repeat_penalty=repeat_penalty,
                     agent_id=agent_id.value,
@@ -306,6 +325,7 @@ class OllamaAgentFn:
                 agent_id, params, raw_text, token_in, token_out, latency_ms,
             )
         turn.empty_retry = empty_retry
+        turn.thinking_text = thinking_text
         return turn
 
     # ── Prompt ───────────────────────────────────────────────
@@ -327,11 +347,11 @@ class OllamaAgentFn:
         num_predict: int = 300,
         repeat_penalty: float = 1.5,
         agent_id: str = "A",
-    ) -> str:
+    ) -> tuple:
         """Appel isolé à ollama.chat — facilement mockable.
 
-        Retourne le texte brut complet (thinking + content) AVANT
-        troncature. La sanitization se fait dans _parse_standard_turn/_parse_oppose_turn.
+        Returns (content: str, thinking: str).
+        Content = réponse finale. Thinking = raisonnement interne (pour audit).
         """
         response = ollama.chat(
             model=model,
@@ -345,10 +365,10 @@ class OllamaAgentFn:
                 "num_predict": num_predict,
                 "repeat_penalty": repeat_penalty,
             },
-            think=True,
+            think=False,
             keep_alive=30,
         )
-        return _extract_content(response)
+        return _extract_content_and_thinking(response)
 
     # ── Parsing ──────────────────────────────────────────────
 
