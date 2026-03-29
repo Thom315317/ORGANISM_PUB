@@ -1,0 +1,319 @@
+{
+  "name": "Cristal",
+  "version": "v12",
+  "phi_evolver": {
+    "enabled": true,
+    "population_size": 20,
+    "mutation_rate": 0.1,
+    "comment": "Évolution génétique des formules Phi - activé par défaut"
+  },
+  "streaming": {
+    "enabled": true,
+    "coalesce_ms": 25,
+    "pulsation_hz": 40,
+    "thinking_indicator": true,
+    "comment": "Streaming réel type ChatGPT"
+  },
+  "ui": {
+    "expert_mode_default": false,
+    "energy_display": "real_only",
+    "model_selectors": 7,
+    "comment": "7 sélecteurs de modèles en Mode Expert"
+  },
+  "tripartite": {
+    "enabled": true,
+    "comment": "Architecture tripartite avec routing local/cloud intelligent",
+    
+    "context_keeper": "qwen2.5:0.5b",
+    "gardien_comment": "Modèle ContextKeeper custom prompté",
+    
+    "orchestrator_local": "huihui_ai/qwen3-abliterated:8b-v2",
+    "orchestrator_cloud": "qwen3-vl:235b-cloud",
+    "conscience_comment": "SEUL à récupérer mémoire, trier, anonymiser, S'EXPRIME à l'utilisateur",
+    
+    "creative_local": "huihui_ai/qwen2.5-abliterate:1.5b",
+    "creative_cloud": "gpt-oss:20b-cloud",
+    "inconscient_comment": "Intuition, créativité - envoie au ContextKeeper pour stockage",
+    
+    "safety_local": "llama3.2:1b",
+    "safety_cloud": "deepseek-v3.1:671b-cloud",
+    "surmoi_comment": "Éthique, validation - envoie au ContextKeeper pour stockage",
+    
+    "cloud_models": [
+      "gpt-oss:120b-cloud",
+      "gpt-oss:20b-cloud",
+      "deepseek-v3.1:671b-cloud",
+      "qwen3-coder:480b-cloud",
+      "qwen3-vl:235b-cloud",
+      "minimax-m2:cloud",
+      "glm-4.6:cloud"
+    ],
+    
+    "complexity_threshold": 0.6,
+    "complexity_comment": "Au-dessus de 0.6 → appel cloud",
+    "cloud_timeout_ms": 15000,
+    "fallback_enabled": true,
+    "fallback_comment": "Si cloud échoue → retour local"
+  },
+  "models": {
+    "orchestrator": {
+      "name": "huihui_ai/qwen3-abliterated:8b-v2",
+      "num_ctx": 4096,
+      "role": "Chef - Discriminant contexte, VETO, génération finale",
+      "vram": 5500,
+      "priority": 1
+    },
+    "creative_sampler": {
+      "name": "qwen2.5:0.5b",
+      "num_ctx": 2048,
+      "role": "Analyse intuitive rapide - modèle léger suffisant",
+      "vram": 400,
+      "priority": 2,
+      "comment": "0.5B suffit pour deviner complexité/cycles"
+    },
+    "safety_controller": {
+      "name": "qwen2.5:1.5b",
+      "num_ctx": 4096,
+      "role": "Arbitrage durée, validation post-gate, compression contexte",
+      "vram": 1000,
+      "priority": 3,
+      "comment": "1.5B pour validation LLM et compression contexte"
+    },
+    "contextualizer": {
+      "name": "phi3:mini",
+      "num_ctx": 2048,
+      "keep_alive": 5,
+      "role": "Contextualisation (audience, ton, urgence) - JSON structuré",
+      "vram": 2200,
+      "priority": 4,
+      "comment": "3.8B phi3 - meilleur que qwen2.5:1.5b pour JSON. keep_alive=5s, se décharge vite."
+    }
+  },
+  "safety_controller_mode": "partial",
+  "context_keeper": {
+    "model": "qwen2.5:0.5b",
+    "keep_alive": -1,
+    "auto_dump_interval": 60,
+    "max_context_tokens": 16384,
+    "num_ctx": 16384,
+    "role": "Persistance du contexte entre instances, mémoire vivante",
+    "vram": 600,
+    "comment": "LLM léger avec grand contexte - 16k tokens pour conserver l'historique complet"
+  },
+  "context_management": {
+    "threshold_restart_percent": 85,
+    "resume_tokens_target": 500,
+    "context_check_interval": 5
+  },
+  "fibonacci": {
+    "sequence": [
+      1,
+      1,
+      2,
+      3,
+      5,
+      8,
+      13,
+      21,
+      34
+    ],
+    "base_time_unit_ms": 500,
+    "max_cycles": 8
+  },
+  "libre_echange": {
+    "enabled": true,
+    "think_interval_base_s": 15,
+    "think_probability": 0.3,
+    "interrupt_check_ms": 100
+  },
+  "phi": {
+    "seuil_minimum": 0.4,
+    "seuil_excellent": 0.8,
+    "max_retries": 3
+  },
+  "negociation": {
+    "orchestrator_veto_weight": 0.6,
+    "creative_sampler_proposal_weight": 0.3,
+    "safety_controller_arbitrage_weight": 0.1
+  },
+  "web": {
+    "enabled": true,
+    "search_engine": "duckduckgo",
+    "max_results": 5,
+    "timeout": 10,
+    "summary_experimental": false,
+    "mode": "smart"
+  },
+  "cache": {
+    "enabled": true,
+    "ttl_seconds": 604800,
+    "comment": "Cache LLM persistant (SQLite) pour améliorer le ROI; TTL par défaut = 7 jours"
+  },
+  "narrative_cues": {
+    "enabled": true,
+    "detection_threshold": 0.4,
+    "max_scene_history": 20,
+    "inject_scene_context": true,
+    "comment": "Détection d'indices narratifs entre parenthèses et gestion du lieu virtuel invariant"
+  },
+  "modules": {
+    "web": true,
+    "files": true,
+    "exec": false,
+    "automod": true,
+    "comment": "États par défaut des modules activables",
+    "safety_gate": true,
+    "self_continuity": true,
+    "data_migration": true
+  },
+  "securite": {
+    "fichiers_proteges": [
+      "safety_controller.json",
+      "/etc/passwd",
+      "/etc/shadow"
+    ],
+    "commandes_interdites": [
+      "rm -rf /",
+      "rm -rf ~",
+      "format",
+      "mkfs",
+      "dd if=",
+      "shutdown",
+      "reboot",
+      ":(){ :|:& };:"
+    ],
+    "max_timeout_exec": 30,
+    "allowed_bins_exec": [
+      "python",
+      "python3",
+      "node",
+      "npm",
+      "npx",
+      "ls",
+      "cat",
+      "echo",
+      "grep",
+      "pwd",
+      "whoami",
+      "date",
+      "head",
+      "tail",
+      "sed",
+      "awk"
+    ]
+  },
+  "interface": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "comment": "0.0.0.0 = accessible sur le réseau, 127.0.0.1 = local uniquement"
+  },
+  "auth": {
+    "enabled": false,
+    "username": "cristal",
+    "password": "change_moi_123",
+    "comment": "Mettre enabled=true pour activer l'authentification"
+  },
+  "learning": {
+    "min_reward": 0.5,
+    "min_phi": 0.4,
+    "export_format": "jsonl"
+  },
+  "process_manager": {
+    "max_processes": 3,
+    "allowed_prefixes": [
+      "python ",
+      "python3 "
+    ],
+    "comment": "Sécurisé: uniquement python/python3, blacklist fragments = securite.commandes_interdites"
+  },
+  "meta_learning": {
+    "enabled": true,
+    "comment": "MetaRouter ajuste légèrement les cycles selon Φ (explicable, borné)"
+  },
+  "future_core": {
+    "enabled": true,
+    "auto_mode": true,
+    "logging_enabled": false,
+    "phi_profile": "stable",
+    "regime_default": "stable"
+  },
+  "capabilities": {
+    "image": {
+      "enabled": false,
+      "planned": true
+    },
+    "audio": {
+      "enabled": false,
+      "planned": true
+    },
+    "video": {
+      "enabled": false,
+      "planned": true
+    }
+  },
+  "enable_parallel": false,
+  "context_compression_threshold": 4000,
+  "warmup_models": [],
+  "cache_max_size": 50,
+  "cache_temp_threshold": 0.5,
+  "data_dir": "data",
+  "workspace": {
+    "root": "workspace",
+    "allow_read_any": false,
+    "allow_write_any": false
+  },
+  "guardian": {
+    "budgets": {
+      "max_tool_calls": 40,
+      "max_web_calls": 20,
+      "max_exec_calls": 10,
+      "max_process_actions": 10,
+      "max_file_ops": 50
+    },
+    "rate_limits": {
+      "chat": {
+        "rate_per_sec": 2.0,
+        "burst": 10
+      },
+      "web_search": {
+        "rate_per_sec": 1.0,
+        "burst": 6
+      },
+      "exec": {
+        "rate_per_sec": 0.5,
+        "burst": 3
+      },
+      "process": {
+        "rate_per_sec": 0.5,
+        "burst": 3
+      }
+    }
+  },
+  "organism": {
+    "mr": {
+      "path": "data/organism/mr_events.jsonl",
+      "max_file_size_mb": 100,
+      "flush_interval_events": 1
+    },
+    "l0r": {
+      "ring_size": 64,
+      "default_ttl": 10,
+      "evidence_pack_budget_tokens": 2000,
+      "token_estimate_ratio": 3.5
+    },
+    "agents": {
+      "A": {"model": "minimax-m2.7:cloud", "temperature": 0.7, "num_ctx": 65536, "num_predict": 1500, "repeat_penalty": 1.2},
+      "B": {"model": "kimi-k2.5:cloud", "temperature": 0.7, "num_ctx": 65536, "num_predict": 1500, "repeat_penalty": 1.2},
+      "C": {"model": "glm-5:cloud", "temperature": 0.7, "num_ctx": 65536, "num_predict": 1500, "repeat_penalty": 1.2}
+    },
+    "judge": {
+      "judge_model": "gemini-3-flash-preview:cloud",
+      "summarizer_model": "nemotron-3-super:cloud",
+      "judge_temperature": 0.5,
+      "judge_num_ctx": 131072,
+      "judge_num_predict": 4000,
+      "summarizer_num_ctx": 65536,
+      "summarizer_num_predict": 4000
+    }
+  }
+}

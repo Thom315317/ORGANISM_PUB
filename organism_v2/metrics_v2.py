@@ -18,6 +18,8 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.stats import wasserstein_distance
+from scipy.spatial.distance import jensenshannon
 
 # Utilise le cache local, évite les requêtes HuggingFace au chargement
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -118,7 +120,18 @@ class TickMetrics:
         self.draft_velocity: List[float] = []
         self.post_selection_variance: List[float] = []
         self.quality_per_tick: List[float] = []
+        # New metrics
+        self.collapse_loss: List[float] = []
+        self.wasserstein_dist: List[float] = []
+        self.jensen_shannon_div: List[float] = []
+        self.diversity_momentum: List[float] = []
+        self.intrinsic_dim: List[float] = []
+        self._ccv_history: List[float] = []
+        self._embeddings_window: List[np.ndarray] = []
         self._prev_selected: Optional[np.ndarray] = None
+        # Length bias tracking
+        self.draft_lengths: Dict[str, List[int]] = {}  # agent_id -> list of word counts
+        self.winner_sequence: List[Optional[str]] = []  # winner per tick
 
     def record_tick(
         self,
@@ -137,6 +150,12 @@ class TickMetrics:
         agent_ids = list(agent_drafts.keys())
         texts = [agent_drafts[aid] for aid in agent_ids]
 
+        # Track draft lengths and winners for length bias analysis
+        for aid in agent_ids:
+            wc = len(agent_drafts[aid].split())
+            self.draft_lengths.setdefault(aid, []).append(wc)
+        self.winner_sequence.append(winner_id)
+
         if not texts:
             dim = _embed_dim or 768
             zero = np.zeros(dim)
@@ -147,6 +166,11 @@ class TickMetrics:
             self.draft_velocity.append(float("nan"))
             self.post_selection_variance.append(0.0)
             self.quality_per_tick.append(0.0)
+            self.collapse_loss.append(0.0)
+            self.wasserstein_dist.append(float("nan"))
+            self.jensen_shannon_div.append(float("nan"))
+            self.diversity_momentum.append(0.0)
+            self.intrinsic_dim.append(float("nan"))
             self._prev_selected = zero
             return
 
@@ -194,6 +218,123 @@ class TickMetrics:
             self.quality_per_tick.append(float(verdict.confidence))
         else:
             self.quality_per_tick.append(0.0)
+
+        # ── Collapse loss (cosine distance mean→selected) ──
+        self.collapse_loss.append(cosine_distance(sv_selected, sv_mean))
+
+        # ── Wasserstein distance (mean vs selected distribution) ──
+        sv_mean_norm = sv_mean / (np.linalg.norm(sv_mean) + 1e-9)
+        sv_sel_norm = sv_selected / (np.linalg.norm(sv_selected) + 1e-9)
+        try:
+            w_dist = wasserstein_distance(np.abs(sv_mean_norm), np.abs(sv_sel_norm))
+            self.wasserstein_dist.append(float(w_dist))
+        except Exception:
+            self.wasserstein_dist.append(float("nan"))
+
+        # ── Jensen-Shannon divergence inter-agents ──
+        if len(embeddings) >= 2:
+            js_divs = []
+            for i in range(len(embeddings)):
+                for j in range(i + 1, len(embeddings)):
+                    p = np.abs(embeddings[i])
+                    q = np.abs(embeddings[j])
+                    p = p / (p.sum() + 1e-9)
+                    q = q / (q.sum() + 1e-9)
+                    try:
+                        js_divs.append(float(jensenshannon(p, q)))
+                    except Exception:
+                        pass
+            self.jensen_shannon_div.append(
+                float(np.mean(js_divs)) if js_divs else float("nan")
+            )
+        else:
+            self.jensen_shannon_div.append(0.0)
+
+        # ── Diversity momentum (CCV variation tick-to-tick) ──
+        current_ccv = self.claim_cosine_variance[-1]
+        self._ccv_history.append(current_ccv)
+        if len(self._ccv_history) >= 2:
+            self.diversity_momentum.append(
+                self._ccv_history[-1] - self._ccv_history[-2]
+            )
+        else:
+            self.diversity_momentum.append(0.0)
+
+        # ── Intrinsic dimensionality (sliding window PCA participation ratio) ──
+        self._embeddings_window.append(sv_mean.copy())
+        if len(self._embeddings_window) > 10:
+            self._embeddings_window.pop(0)
+
+        if len(self._embeddings_window) >= 3:
+            try:
+                W = np.stack(self._embeddings_window)
+                W_centered = W - W.mean(axis=0)
+                _, s, _ = np.linalg.svd(W_centered, full_matrices=False)
+                eigenvalues = s ** 2
+                eigenvalues = eigenvalues[eigenvalues > 1e-10]
+                if eigenvalues.sum() > 0:
+                    p_eig = eigenvalues / eigenvalues.sum()
+                    intrinsic_d = 1.0 / float(np.sum(p_eig ** 2))
+                else:
+                    intrinsic_d = 1.0
+                self.intrinsic_dim.append(round(intrinsic_d, 4))
+            except Exception:
+                self.intrinsic_dim.append(float("nan"))
+        else:
+            self.intrinsic_dim.append(float("nan"))
+
+    def _compute_length_bias_analysis(self) -> Dict:
+        """Compute length bias analysis: per-agent stats + Pearson r."""
+        if not self.draft_lengths:
+            return {"per_agent": {}, "pearson_r": None, "interpretation": "no data"}
+        win_counts: Dict[str, int] = {}
+        for w in self.winner_sequence:
+            if w is not None:
+                win_counts[w] = win_counts.get(w, 0) + 1
+        per_agent = {}
+        avg_lengths = []
+        win_rates = []
+        for aid, lengths in self.draft_lengths.items():
+            avg_len = sum(lengths) / len(lengths) if lengths else 0.0
+            n_wins = win_counts.get(aid, 0)
+            n_drafts = len(lengths)
+            wr_ = n_wins / n_drafts if n_drafts > 0 else 0.0
+            per_agent[aid] = {
+                "avg_draft_length": round(avg_len, 1),
+                "win_rate": round(wr_, 4),
+                "n_drafts": n_drafts,
+            }
+            avg_lengths.append(avg_len)
+            win_rates.append(wr_)
+        pearson_r = None
+        interpretation = "insufficient data"
+        n = len(avg_lengths)
+        if n >= 2:
+            mean_x = sum(avg_lengths) / n
+            mean_y = sum(win_rates) / n
+            cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(avg_lengths, win_rates)) / n
+            std_x = math.sqrt(sum((x - mean_x) ** 2 for x in avg_lengths) / n)
+            std_y = math.sqrt(sum((y - mean_y) ** 2 for y in win_rates) / n)
+            if std_x > 1e-9 and std_y > 1e-9:
+                pearson_r = round(cov / (std_x * std_y), 4)
+                abs_r = abs(pearson_r)
+                if abs_r < 0.3:
+                    interpretation = "weak or no length bias"
+                elif abs_r < 0.6:
+                    interpretation = "moderate length bias -- investigate"
+                else:
+                    interpretation = "strong length bias -- mitigation needed"
+                if pearson_r < 0:
+                    interpretation += " (shorter drafts win more)"
+                elif pearson_r > 0.3:
+                    interpretation += " (longer drafts win more)"
+            else:
+                interpretation = "no variance in length or win rate"
+        return {
+            "per_agent": per_agent,
+            "pearson_r": pearson_r,
+            "interpretation": interpretation,
+        }
 
     def compute_sim_curves(
         self,
@@ -249,9 +390,29 @@ class TickMetrics:
                     sim_mean_curve.append(None)
                     sim_sel_curve.append(None)
 
+            # Wasserstein recovery curve
+            wasserstein_curve = []
+            for k in range(1, k_max + 1):
+                idx = t_p + k
+                if idx < len(self.wasserstein_dist):
+                    wasserstein_curve.append(self.wasserstein_dist[idx])
+                else:
+                    wasserstein_curve.append(None)
+
+            # Intrinsic dim recovery curve
+            intrinsic_curve = []
+            for k in range(1, k_max + 1):
+                idx = t_p + k
+                if idx < len(self.intrinsic_dim):
+                    intrinsic_curve.append(self.intrinsic_dim[idx])
+                else:
+                    intrinsic_curve.append(None)
+
             result[f"tick_{t_p}"] = {
                 "mean": sim_mean_curve,
                 "selected": sim_sel_curve,
+                "wasserstein": wasserstein_curve,
+                "intrinsic_dim": intrinsic_curve,
             }
 
         return result
@@ -270,6 +431,9 @@ class TickMetrics:
                 for v in lst
             ]
 
+        # Compute length bias analysis
+        length_bias = self._compute_length_bias_analysis()
+
         return {
             "state_vector_mean": _to_list(self.state_vectors_mean),
             "state_vector_selected": _to_list(self.state_vectors_selected),
@@ -278,4 +442,10 @@ class TickMetrics:
             "draft_velocity": _float_list(self.draft_velocity),
             "post_selection_variance": _float_list(self.post_selection_variance),
             "quality_per_tick": _float_list(self.quality_per_tick),
+            "collapse_loss": _float_list(self.collapse_loss),
+            "wasserstein_dist": _float_list(self.wasserstein_dist),
+            "jensen_shannon_div": _float_list(self.jensen_shannon_div),
+            "diversity_momentum": _float_list(self.diversity_momentum),
+            "intrinsic_dim": _float_list(self.intrinsic_dim),
+            "length_bias_analysis": length_bias,
         }

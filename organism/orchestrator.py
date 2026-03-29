@@ -180,7 +180,7 @@ def strip_thinking(text: str) -> str:
 
     # Layer 1: Tagged thinking (safest — clean delimiters)
     text = re.sub(
-        r'<(?:think|thinking)>.*?</(?:think|thinking)>',
+        r'<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>',
         '', text, flags=re.DOTALL,
     )
 
@@ -655,11 +655,12 @@ class Orchestrator:
                         winner_turn = t
                         break
             if winner_turn and winner_turn.text:
+                _sig = judge_verdict.signals or {}
                 self._l0r.insert(
                     chunk_id=winner_turn.chunk_id,
                     salience=1.0,
-                    novelty=judge_verdict.signals.get("novelty", 0.0),
-                    conflict=judge_verdict.signals.get("conflict", 0.0),
+                    novelty=_sig.get("novelty", 0.0),
+                    conflict=_sig.get("conflict", 0.0),
                 )
 
             # Judge claims -> WorldModel

@@ -62,16 +62,15 @@ Discarded drafts are logged in `discarded_drafts` field and `events.jsonl`.
 | A | A,B,C | Competitive (gemini) | None | Baseline — natural multi-agent dynamics |
 | B | A,B,C | Competitive (gemini) | Neutral t15/t35 | Injection control — does injection itself perturb? |
 | C | A,B,C | Competitive (gemini) | Strong t15/t35 | Resilience — response to destructive perturbation |
-| E | A only | No-LLM auto | Strong t15/t35 | Single-agent control (slot A, minimax-m2.7) |
-| E_B | B only | No-LLM auto | Strong t15/t35 | Single-agent control (slot B, kimi-k2.5) |
-| E_C | C only | No-LLM auto | Strong t15/t35 | Single-agent control (slot C, glm-5) |
+| D | A×3 | Random winner | Strong t15/t35 | Duplicated-agent control — "just averaging" without diversity |
+| E | A only | No-LLM auto | Strong t15/t35 | Single-agent control (slot A) |
 | R | A,B,C | Random winner | Strong t15/t35 | Isolates competitive selection from geometric averaging |
 
 ### Perturbation Schedule
 
 - **Neutral (B)**: rephrase — same meaning, different words, same length
-- **Compression (C/E/E_B/E_C/R, t15)**: reduce to 1 sentence
-- **Inversion (C/E/E_B/E_C/R, t35)**: argue the opposite
+- **Compression (C/D/E/R, t15)**: reduce to 1 sentence
+- **Inversion (C/D/E/R, t35)**: argue the opposite
 
 Perturbation applied to previous winning draft, injected as user message
 BEFORE agent calls at the perturbation tick.
@@ -79,15 +78,16 @@ BEFORE agent calls at the perturbation tick.
 ### Seeds and Runs
 
 Seeds: 42, 123, 456, 7, 77, 777 (6 per condition)
-Total: 7 conditions x 6 seeds = 42 runs, 80 ticks each
+Total: 6 conditions x 6 seeds = 36 runs per bench, 80 ticks each
 
 ## Key Comparisons
 
 - **A vs B** — does injection itself have an effect? (if B ~ A, injection is neutral)
 - **B vs C** — does perturbation content matter? (if C != B, content matters)
-- **C vs E/E_B/E_C** — does multi-agent resist better than single-agent?
+- **C vs E** — does multi-agent resist better than single-agent?
 - **C vs R** — does competitive selection add value beyond geometric averaging?
-- **E vs E_B vs E_C** — model size/family effect on single-agent resilience
+- **R vs D** — does diversity matter beyond averaging? (D = 3 clones, no diversity)
+- **V5 vs V6** — cross-lineup robustness (different model families, same protocol)
 
 ## Metrics
 
@@ -101,6 +101,11 @@ Total: 7 conditions x 6 seeds = 42 runs, 80 ticks each
 | quality_per_tick | Judge quality score (0-1) | DIRECT |
 | judge_score_dispersion | Variance of judge scores across agents | DERIVED |
 | sim_curves | Cosine similarity decay after perturbation (k=1..k_max) | DERIVED |
+| collapse_loss | Cosine distance mean→selected (same as PSV, renamed for clarity) | DERIVED |
+| wasserstein_dist | Wasserstein-1D between mean and selected embedding distributions | DERIVED |
+| jensen_shannon_div | Jensen-Shannon divergence between agent embedding distributions | DERIVED |
+| diversity_momentum | CCV variation tick-to-tick (acceleration of diversity) | DERIVED |
+| intrinsic_dim | PCA participation ratio on sliding window of 10 mean embeddings | DERIVED |
 
 ### Analysis Caveats
 
@@ -126,15 +131,20 @@ Total: 7 conditions x 6 seeds = 42 runs, 80 ticks each
 - Summarizer disabled — judge receives raw drafts directly
 - System prompts: competitive debate framing, sanctions for non-conforming responses
 - `_anon_map` in tick_end events for anonymization audit
-- `num_ctx` explicit: 65536 (agents/perturbation), 131072 (judge)
-- `num_predict=1500` for agents (was 4000), 4000 for judge
 - 80 ticks per run (was 50)
-- Injection at t42 removed (was present in V3 DEFAULT_INJECTIONS)
-- Perturbation neutral prompt enforces same-length output
-- Perturbation model: gpt-oss:120b-cloud (was minimax-m2.7)
-- Agent A: minimax-m2.7:cloud (was glm-5:cloud — 503 errors)
-- bench_version field: "v4" in all output JSON
 - k_max=44 for sim_curves (was 14)
+
+### V5/V6 Additions
+- **Condition D** (duplicated-agent control): 3 clones of Agent A + random winner
+- **English language**: all prompts, injections, system prompts in English
+- **OllamaAgentFn**: `think` and `system_prompts` parameters (per-bench config)
+- **Perturbation configurable**: `_PERTURBATION_NUM_CTX`, `_PERTURBATION_NUM_PREDICT`
+- **Seed-first loop order**: all conditions per seed before next seed
+- **5 new metrics**: collapse_loss, wasserstein_dist, jensen_shannon_div, diversity_momentum, intrinsic_dim
+- **--qualify flag**: 50-tick qualification test with GO/NO-GO report
+- **Two model lineups**: V5 and V6 use completely different agent/judge families
+- **num_ctx=128000** for agents, 128000-200000 for judge
+- **num_predict=3000** for agents, 4000 for judge
 
 ## Connectome (Viewer)
 
@@ -162,12 +172,17 @@ Requires Ollama running locally: https://ollama.com
 ## Usage
 
 ```bash
-# Full bench V4 (42 runs, 80 ticks)
-python organism_v2/bench_v2.py --conditions A,B,C,E,E_B,E_C,R \
-  --seeds 42,123,456,7,77,777 --ticks 80 --output-dir runs/bench_v4/
+# Bench V5 — English, lineup 1 (36 runs)
+python bench_v5.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+
+# Bench V6 — English, lineup 2 (36 runs)
+python bench_v6.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+
+# Qualification test (50 ticks, condition C seed 42)
+python bench_v5.py --qualify
 
 # Viewer
-python organism_v2/viewer_v3.py --runs-dir runs/bench_v4/ --port 8767
+python organism_v2/viewer_v3.py --runs-dir runs/bench_v5/ --port 8767
 ```
 
 ## Key Files
@@ -175,8 +190,10 @@ python organism_v2/viewer_v3.py --runs-dir runs/bench_v4/ --port 8767
 | File | Description |
 |------|-------------|
 | `organism/orchestrator.py` | Tick execution, agent calls, strip_thinking(), judge integration |
-| `organism/agent_wrapper.py` | LLM calls (think=False), system prompts, response parsing |
+| `organism/agent_wrapper.py` | LLM calls (think param), system_prompts param, response parsing |
 | `organism/judge.py` | Judge pipeline (summarizer disabled), fixed temperature, anti-stagnation guard |
+| `bench_v5.py` | Standalone English bench, lineup 1 (gpt-oss/deepseek/nemotron), condition D |
+| `bench_v6.py` | Standalone English bench, lineup 2 (minimax/kimi/gpt-oss agents, glm-5 judge), condition D |
 | `organism/scheduler.py` | Mode selection (Idle/Explore/Debate/Implement/Recover) |
 | `organism/l0r.py` | Layer 0 Register — short-term memory, winner propagation |
 | `organism/mr.py` | Message Registry — blockchain event log |

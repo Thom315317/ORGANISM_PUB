@@ -42,7 +42,38 @@ Runs 7 conditions x N seeds x 80 ticks.
 
 5 distinct families. No shared weights or architecture.
 
-### Bench V3 audit fixes (retained)
+### Bench V5/V6 (English, cross-language replication)
+
+Standalone bench scripts at project root: `bench_v5.py`, `bench_v6.py`.
+
+- **Language**: English (prompts, injections, system prompts)
+- **Condition D** added: 3 clones of Agent A + RandomJudge — controls for "just averaging"
+- **CONDITIONS**: A, B, C, D, E, R (6 conditions)
+- **--qualify flag**: 50-tick qualification test (C seed 42) with GO/NO-GO report
+- **OllamaAgentFn**: new `think` and `system_prompts` parameters for per-bench configuration
+- **perturbation.py**: `_PERTURBATION_NUM_CTX` and `_PERTURBATION_NUM_PREDICT` configurable
+- **Seed-first loop order**: all conditions per seed before next seed
+- **5 new metrics**: collapse_loss, wasserstein_dist, jensen_shannon_div, diversity_momentum, intrinsic_dim
+
+| | V5 (lineup 1) | V6 (lineup 2) |
+|---|---|---|
+| Agent A | gpt-oss:120b-cloud | glm-5:cloud |
+| Agent B | deepseek-v3.2:cloud | kimi-k2.5:cloud |
+| Agent C | nemotron-3-super:cloud | minimax-m2.7:cloud |
+| Judge | gemini-3-flash-preview:cloud | gemini-3-flash-preview:cloud |
+| Perturbation | minimax-m2.7:cloud | nemotron-3-super:cloud |
+| D' clones | gpt-oss:120b-cloud ×3 | glm-5:cloud ×3 |
+| num_ctx | 128000 | 128000 (judge: 200000) |
+| num_predict | 3000 (judge: 4000) | 3000 (judge: 4000) |
+
+### Length bias mitigation (V5/V6)
+
+- **Agent prompts**: "Aim for 150 to 200 words. Never write less than 100 or more than 250."
+- **Judge prompt**: explicit verbosity penalty — "A short, precise response is SUPERIOR to a long, diluted one."
+- **Metrics**: `length_bias_analysis` in results.json — per-agent avg_draft_length, win_rate, Pearson r correlation.
+- References: Dubois et al. 2024 (Length-Controlled AlpacaEval), Wei et al. 2024 (LLM-as-a-Judge biases).
+
+### Bench V3 audit fixes (retained in V4/V5/V6)
 
 - Judge temperature fixed at 0.5 (no adaptive drift)
 - Anti-stagnation disabled for all conditions
@@ -61,12 +92,21 @@ Runs 7 conditions x N seeds x 80 ticks.
 ### Usage
 
 ```bash
-# Full bench V4 (21 runs, 80 ticks each)
-python organism_v2/bench_v2.py --conditions A,B,C,E,E_B,E_C,R \
-  --seeds 42,123,456 --ticks 80
+# Full bench V4 (French, 30 runs)
+python organism_v2/bench_v2.py --conditions A,B,C,E,R \
+  --seeds 42,123,456,7,77,777 --ticks 80 --output-dir runs/bench_v4/
+
+# Full bench V5 (English, lineup 1, 36 runs)
+python bench_v5.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+
+# Full bench V6 (English, lineup 2, 36 runs)
+python bench_v6.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+
+# Qualification test (50 ticks, C seed 42)
+python bench_v5.py --qualify
 
 # Dry-run
-python organism_v2/bench_v2.py --dry-run --conditions A,C,E,R --seeds 42
+python bench_v5.py --dry-run --conditions A,C,D --seeds 42
 ```
 
 ## Viewer (`viewer_v3.py`)

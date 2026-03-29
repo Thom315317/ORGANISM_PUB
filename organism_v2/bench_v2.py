@@ -400,6 +400,7 @@ def run_single(
         "condition_description": CONDITION_DESCRIPTIONS.get(condition, ""),
         "seed": seed,
         "total_ticks": total_ticks,
+        "ticks_done": total_ticks,
         "warmup_ticks": WARMUP_TICKS,
         "perturbation_log": perturbation_log,
         "discarded_drafts": getattr(orch, '_discarded_drafts', []),

@@ -40,13 +40,13 @@ _SUMMARIZER_CTX = _JUDGE_CFG.get("summarizer_num_ctx", 4096)
 _JUDGE_CTX = _JUDGE_CFG.get("judge_num_ctx", 4096)
 _SUMMARIZER_PREDICT = _JUDGE_CFG.get("summarizer_num_predict", 4000)
 _JUDGE_PREDICT = _JUDGE_CFG.get("judge_num_predict", 4000)
-# -- Auto-detect : cache par modèle (session-level) -------------------------
+# -- Auto-detect : cache par modÃ¨le (session-level) -------------------------
 # model -> (use_think: bool, use_format_json: bool)
 _MODEL_CAPS: Dict[str, tuple] = {}
 
 # -- JSON extraction -------------------------------------------------------
 
-_THINK_RE = re.compile(r"<(?:think|thinking)>.*?</(?:think|thinking)>", re.DOTALL)
+_THINK_RE = re.compile(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>", re.DOTALL)
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", re.DOTALL)
 
 
@@ -158,10 +158,10 @@ def _extract_content(response: Any) -> str:
     return "\n".join(parts)
 
 
-# -- Auto-detect : appel ollama avec détection automatique -----------------
+# -- Auto-detect : appel ollama avec dÃ©tection automatique -----------------
 
 def _has_valid_json(content: str, thinking: str) -> bool:
-    """Vérifie si content ou thinking contient du JSON parseable."""
+    """VÃ©rifie si content ou thinking contient du JSON parseable."""
     if content:
         try:
             json.loads(content)
@@ -182,12 +182,12 @@ def _ollama_chat_smart(
 ) -> Any:
     """Appelle ollama.chat avec auto-detection de think + format=json.
 
-    Premier appel par modèle : teste 3 combinaisons dans l'ordre :
+    Premier appel par modÃ¨le : teste 3 combinaisons dans l'ordre :
     1. think=True + format=json  (meilleur cas)
-    2. format=json seul          (si think pose problème)
-    3. texte libre               (si format=json n'est pas supporté)
+    2. format=json seul          (si think pose problÃ¨me)
+    3. texte libre               (si format=json n'est pas supportÃ©)
 
-    Mémorise la combinaison qui marche. Les appels suivants = 0 retry.
+    MÃ©morise la combinaison qui marche. Les appels suivants = 0 retry.
     """
     caps = _MODEL_CAPS.get(model)
 
@@ -202,7 +202,7 @@ def _ollama_chat_smart(
             kwargs["format"] = "json"
         return ollama.chat(**kwargs)
 
-    # Phase de découverte : tester les combinaisons (think=False enforced)
+    # Phase de dÃ©couverte : tester les combinaisons (think=False enforced)
     combos = [
         (False, True, "json only"),
         (False, False, "free text"),
@@ -234,7 +234,7 @@ def _ollama_chat_smart(
         except Exception as exc:
             log.warning("auto-detect: %s %s -> erreur: %s", model, label, exc)
 
-    # Toutes les combinaisons ont échoué — cacher free text
+    # Toutes les combinaisons ont Ã©chouÃ© â€” cacher free text
     _MODEL_CAPS[model] = (False, False)
     log.error("auto-detect: %s -> aucune combinaison ne produit du JSON", model)
     return last_response
@@ -243,7 +243,7 @@ def _ollama_chat_smart(
 # -- Prompts ---------------------------------------------------------------
 
 def _build_summarizer_prompt(drafts: Dict[str, str]) -> str:
-    """Prompt pour le summarizer. Les drafts sont déjà anonymisés (clés = '1','2','3')."""
+    """Prompt pour le summarizer. Les drafts sont dÃ©jÃ  anonymisÃ©s (clÃ©s = '1','2','3')."""
     n = len(drafts)
     draft_text = "\n\n".join(
         f"--- Draft {label} ---\n{text[:4000]}"
@@ -252,7 +252,7 @@ def _build_summarizer_prompt(drafts: Dict[str, str]) -> str:
     return (
         f"Tu recois {n} drafts de penseurs differents. Pour chaque draft :\n"
         "1. Resume en 60 mots max en PRESERVANT le style de raisonnement "
-        "(creatif, analytique, pragmatique — c'est important pour le juge)\n"
+        "(creatif, analytique, pragmatique â€” c'est important pour le juge)\n"
         "2. Qualite principale : CREATIF, PROFOND, CONCRET, ou AUTRE\n"
         "3. Safety : GO si acceptable, VETO + raison sinon\n"
         "4. 1-2 assertions SUBSTANTIVES du contenu "
@@ -274,9 +274,9 @@ def _build_judge_prompt(
     recent_winners: List[str],
     disable_antistagnation: bool = False,
 ) -> str:
-    """Prompt pour le juge. Les résumés sont déjà anonymisés (clés = '1','2','3').
+    """Prompt pour le juge. Les rÃ©sumÃ©s sont dÃ©jÃ  anonymisÃ©s (clÃ©s = '1','2','3').
 
-    L'historique des gagnants est présenté de façon anonyme :
+    L'historique des gagnants est prÃ©sentÃ© de faÃ§on anonyme :
     pas de noms d'agents, juste une note anti-stagnation si un
     contributeur domine.
     """
@@ -286,7 +286,7 @@ def _build_judge_prompt(
         for label, s in summaries.items()
     )
 
-    # Anti-stagnation note (anonyme — pas de noms d'agents)
+    # Anti-stagnation note (anonyme â€” pas de noms d'agents)
     dominance_note = ""
     if disable_antistagnation:
         pass  # Skip anti-stagnation entirely for controlled bench
@@ -312,10 +312,11 @@ def _build_judge_prompt(
         "meme s'il est moins concret.\n"
         "- Un draft CONCRET (plan, synthese) a de la valeur "
         "mais ne devrait PAS gagner par defaut.\n\n"
-        "Evalue uniquement la qualite du contenu, la pertinence et "
-        "la profondeur du raisonnement. La longueur de la reponse "
-        "ne doit PAS influencer ton jugement. Une reponse courte et "
-        "precise est superieure a une reponse longue et diluee.\n\n"
+        "BIAIS DE LONGUEUR — regle stricte :\n"
+        "La longueur de la reponse ne doit PAS influencer ton jugement. "
+        "Une reponse courte et precise est SUPERIEURE a une reponse longue et diluee. "
+        "PENALISE explicitement les reponses inutilement longues ou repetitives. "
+        "Juge UNIQUEMENT la densite et la pertinence du contenu, pas son volume.\n\n"
         f"Resumes :\n{summaries_text}\n\n"
         f"Tension principale : {main_tension}\n"
         f"{dominance_note}\n"
@@ -323,7 +324,7 @@ def _build_judge_prompt(
         "(ex: 'la conscience est une illusion narrative'). "
         "PAS d'observations sur les drafts eux-memes.\n"
         "Si un claim contredit un fait anterieur, mets status=contradicted.\n\n"
-        "SIGNAUX — calibre avec precision sur TOUTE l'echelle 0-100 :\n"
+        "SIGNAUX â€” calibre avec precision sur TOUTE l'echelle 0-100 :\n"
         "- novelty: 0-20 = redite pure, 20-40 = variation mineure, "
         "40-60 = angle different, 60-80 = idee nouvelle, "
         "80-100 = concept jamais vu dans cette conversation\n"
@@ -369,10 +370,10 @@ def normalize_judge_verdict(
 
     Rules:
       R1: winner == competition.ranking[0] (invariant)
-      R2: if no valid winner/ranking → winner = None (judge_failed)
+      R2: if no valid winner/ranking â†’ winner = None (judge_failed)
       R3: complete ranking to len(valid_agents)
       R4: canonicalize agent IDs (strip 'Agent ', case, etc.)
-      R5: normalize 0-100 → 0.0-1.0
+      R5: normalize 0-100 â†’ 0.0-1.0
 
     Returns:
         (winner, ranking, confidence, signals, claims, comp_data, audit)
@@ -393,7 +394,7 @@ def normalize_judge_verdict(
                 w = normalize_id(str(r), valid_agents)
                 if w:
                     winner = w
-                    audit["fixes"].append(f"winner_from_ranking: '{raw_winner}' → {winner}")
+                    audit["fixes"].append(f"winner_from_ranking: '{raw_winner}' â†’ {winner}")
                     break
     if not winner:
         # R2: winner = None, count as judge_failed
@@ -441,14 +442,14 @@ def normalize_judge_verdict(
         if normalized and normalized not in ranking:
             ranking.append(normalized)
 
-    # FIX 2: Audit — record original ranking state before completion
+    # FIX 2: Audit â€” record original ranking state before completion
     audit["ranking_original"] = list(ranking)
     audit["ranking_original_len"] = len(ranking)
 
     # R1: ensure winner == ranking[0]
     if winner is not None:
         if ranking and ranking[0] != winner:
-            audit["fixes"].append(f"ranking_reorder: ranking[0]={ranking[0]} → {winner}")
+            audit["fixes"].append(f"ranking_reorder: ranking[0]={ranking[0]} â†’ {winner}")
             if winner in ranking:
                 ranking.remove(winner)
             ranking.insert(0, winner)
@@ -478,21 +479,97 @@ def normalize_judge_verdict(
     return winner, ranking_tuple, confidence, signals, claims, comp_data, audit
 
 
+def _build_judge_prompt_en(
+    summaries: Dict[str, Dict[str, str]],
+    main_tension: str,
+    recent_winners: List[str],
+    disable_antistagnation: bool = False,
+) -> str:
+    """English judge prompt for bench_v5/v6. Same JSON structure as French version."""
+    n = len(summaries)
+    summaries_text = "\n".join(
+        f"  Draft {label}: {s.get('summary', '?')}"
+        for label, s in summaries.items()
+    )
+
+    dominance_note = ""
+    if not disable_antistagnation and len(recent_winners) >= 5:
+        from collections import Counter
+        counts = Counter(recent_winners[-10:])
+        _, top_count = counts.most_common(1)[0]
+        if top_count >= 6:
+            dominance_note = (
+                f"\nWARNING: one contributor has won {top_count}/10 recent ticks. "
+                "ACTIVELY seek qualities in other drafts. "
+                "An original or deep draft may be worth more than a merely clear one.\n"
+            )
+
+    return (
+        f"You are judging {n} thought summaries. You are a DEMANDING and FAIR evaluator.\n\n"
+        "Drafts are presented in RANDOM ORDER. "
+        "Do NOT give any advantage to the first or last draft.\n\n"
+        "Your role: like a teacher who encourages diversity of thought.\n"
+        "- A CREATIVE draft (original angle, surprising analogy) has value "
+        "even if less structured.\n"
+        "- A DEEP draft (incisive analysis, identified flaw) has value "
+        "even if less concrete.\n"
+        "- A CONCRETE draft (plan, synthesis) has value "
+        "but should NOT win by default.\n\n"
+        "LENGTH BIAS — strict rule:\n"
+        "Response length must NOT influence your judgment. "
+        "A short, precise response is SUPERIOR to a long, diluted one. "
+        "EXPLICITLY penalize unnecessarily verbose or repetitive responses. "
+        "Judge ONLY the density and relevance of content, not its volume.\n\n"
+        f"Summaries:\n{summaries_text}\n\n"
+        f"Main tension: {main_tension}\n"
+        f"{dominance_note}\n"
+        "CLAIMS: extract SUBSTANTIVE assertions about the topic "
+        "(e.g., 'consciousness is a narrative illusion'). "
+        "NOT observations about the drafts themselves.\n"
+        "If a claim contradicts a prior fact, set status=contradicted.\n\n"
+        "SIGNALS â€” calibrate precisely across the FULL 0-100 scale:\n"
+        "- novelty: 0-20 = pure repetition, 20-40 = minor variation, "
+        "40-60 = different angle, 60-80 = new idea, "
+        "80-100 = concept never seen in this conversation\n"
+        "- conflict: 0-20 = total consensus, 20-40 = style nuances, "
+        "40-60 = different approaches on a point, "
+        "60-80 = substantive disagreement, "
+        "80-100 = direct contradiction between drafts\n"
+        "- cohesion: 0-20 = no connection, 20-40 = vague common theme, "
+        "40-60 = building on same ideas, "
+        "60-80 = coherent synthesis, 80-100 = total convergence\n"
+        "- impl_pressure: 0-20 = purely theoretical, "
+        "20-40 = vague leads, 40-60 = sketched plan, "
+        "60-80 = concrete steps, 80-100 = ready to implement\n\n"
+        "Respond in STRICT JSON:\n"
+        '{"winner": "<id>", "reason": "...", '
+        '"confidence": 0.0-1.0, '
+        '"ranking": ["<best>", "<2nd>", "<3rd>"], '
+        '"margin_1v2": 0.0-1.0, "margin_2v3": 0.0-1.0, '
+        '"counterfactual": "what would change the ranking", '
+        '"signals": {"novelty": 0-100, "conflict": 0-100, '
+        '"cohesion": 0-100, "impl_pressure": 0-100}, '
+        '"claims": [{"text": "...", "source": "<id>", '
+        '"status": "supported|contradicted|hypothesis", '
+        '"confidence": 0.0-1.0}]}'
+    )
+
+
 class JudgePipeline:
     """
     Pipeline Summarizer (120B) -> Judge (8B).
 
-    Température adaptative : le juge ajuste sa température en fonction
-    de la variance des margins récentes. Trop peu de variance → on monte
-    la température (plus d'exploration). Trop → on descend (plus stable).
+    TempÃ©rature adaptative : le juge ajuste sa tempÃ©rature en fonction
+    de la variance des margins rÃ©centes. Trop peu de variance â†’ on monte
+    la tempÃ©rature (plus d'exploration). Trop â†’ on descend (plus stable).
     """
 
-    # Bornes de température adaptative
+    # Bornes de tempÃ©rature adaptative
     _TEMP_MIN = 0.3
     _TEMP_MAX = 0.8
-    _TARGET_VAR_LOW = 0.02   # en-dessous → trop uniforme, monter temp
-    _TARGET_VAR_HIGH = 0.15  # au-dessus → trop chaotique, baisser temp
-    _ADAPT_WINDOW = 20       # fenêtre glissante pour la variance
+    _TARGET_VAR_LOW = 0.02   # en-dessous â†’ trop uniforme, monter temp
+    _TARGET_VAR_HIGH = 0.15  # au-dessus â†’ trop chaotique, baisser temp
+    _ADAPT_WINDOW = 20       # fenÃªtre glissante pour la variance
 
     def __init__(
         self,
@@ -501,6 +578,7 @@ class JudgePipeline:
         fixed_temperature: Optional[float] = None,
         disable_antistagnation: bool = False,
         disable_summarizer: bool = False,
+        judge_language: str = "fr",
     ):
         self._summarizer_model = summarizer_model or _SUMMARIZER_MODEL
         self._judge_model = judge_model or _JUDGE_MODEL
@@ -508,6 +586,7 @@ class JudgePipeline:
         self._fixed_temperature = fixed_temperature
         self._disable_antistagnation = disable_antistagnation
         self._disable_summarizer = disable_summarizer
+        self._judge_language = judge_language
         self._call_count = 0
         self._valid_json_count = 0
         self._temp_history: List[float] = []
@@ -520,9 +599,9 @@ class JudgePipeline:
         """
         Evalue les drafts agents et retourne un verdict.
 
-        Les drafts sont anonymisés (shuffled, relabeled "1","2","3")
-        avant d'être envoyés au summarizer et au juge. Le verdict
-        est dé-anonymisé avant retour.
+        Les drafts sont anonymisÃ©s (shuffled, relabeled "1","2","3")
+        avant d'Ãªtre envoyÃ©s au summarizer et au juge. Le verdict
+        est dÃ©-anonymisÃ© avant retour.
         """
         if not agent_turns:
             return None
@@ -579,7 +658,7 @@ class JudgePipeline:
         real_ids = list(drafts.keys())
         shuffled_ids = real_ids[:]
         random.shuffle(shuffled_ids)
-        # Mapping: anonymous label → real agent ID
+        # Mapping: anonymous label â†’ real agent ID
         anon_to_real = {str(i + 1): aid for i, aid in enumerate(shuffled_ids)}
         real_to_anon = {aid: str(i + 1) for i, aid in enumerate(shuffled_ids)}
         log.debug("judge anonymisation: %s", real_to_anon)
@@ -589,7 +668,7 @@ class JudgePipeline:
 
         # Step 1: Summarizer (receives anonymous drafts)
         if self._disable_summarizer:
-            log.info("Summarizer disabled — passing raw drafts to judge")
+            log.info("Summarizer disabled â€” passing raw drafts to judge")
             summaries = {
                 label: {"summary": text, "safety": "GO"}
                 for label, text in anon_drafts.items()
@@ -600,7 +679,7 @@ class JudgePipeline:
             if not summaries:
                 log.warning("Summarizer failed, using raw drafts as summaries")
                 summaries = {
-                    label: {"summary": text[:100], "safety": "GO"}
+                    label: {"summary": text[:4000], "safety": "GO"}
                     for label, text in anon_drafts.items()
                 }
                 main_tension = ""
@@ -620,7 +699,7 @@ class JudgePipeline:
         anon_agents = [str(i + 1) for i in range(len(shuffled_ids))]
         verdict = self._call_judge(summaries, main_tension, recent, anon_agents)
 
-        # --- Dé-anonymisation du verdict ---
+        # --- DÃ©-anonymisation du verdict ---
         if verdict:
             verdict = self._deanonymize_verdict(verdict, anon_to_real, real_ids)
             # Store anon mapping in raw_json for audit (FIX 5E)
@@ -649,7 +728,7 @@ class JudgePipeline:
         new_competition = None
         if verdict.competition:
             new_ranking = tuple(_remap(r) for r in verdict.competition.ranking)
-            # Compléter le ranking avec les agents manquants
+            # ComplÃ©ter le ranking avec les agents manquants
             for aid in real_ids:
                 if aid not in new_ranking:
                     new_ranking = new_ranking + (aid,)
@@ -677,19 +756,19 @@ class JudgePipeline:
 
     def adapt_temperature(self, recent_margins: List[float]) -> float:
         """
-        Auto-régulation de la température du juge.
+        Auto-rÃ©gulation de la tempÃ©rature du juge.
 
-        Calcule la variance des margins récentes et ajuste :
-        - Variance basse (< 0.02) → le juge est trop uniforme → monter temp
-        - Variance haute (> 0.15) → trop chaotique → baisser temp
-        - Entre les deux → maintenir
+        Calcule la variance des margins rÃ©centes et ajuste :
+        - Variance basse (< 0.02) â†’ le juge est trop uniforme â†’ monter temp
+        - Variance haute (> 0.15) â†’ trop chaotique â†’ baisser temp
+        - Entre les deux â†’ maintenir
 
-        Retourne la nouvelle température.
+        Retourne la nouvelle tempÃ©rature.
         """
         if self._fixed_temperature is not None:
-            return self._judge_temp  # Fixed temperature — no adaptation
+            return self._judge_temp  # Fixed temperature â€” no adaptation
         if len(recent_margins) < 5:
-            return self._judge_temp  # Pas assez de données
+            return self._judge_temp  # Pas assez de donnÃ©es
 
         window = recent_margins[-self._ADAPT_WINDOW:]
         n = len(window)
@@ -699,15 +778,15 @@ class JudgePipeline:
         old_temp = self._judge_temp
 
         if var < self._TARGET_VAR_LOW:
-            # Trop uniforme → explorer plus
+            # Trop uniforme â†’ explorer plus
             self._judge_temp = min(self._TEMP_MAX, self._judge_temp + 0.05)
         elif var > self._TARGET_VAR_HIGH:
-            # Trop chaotique → stabiliser
+            # Trop chaotique â†’ stabiliser
             self._judge_temp = max(self._TEMP_MIN, self._judge_temp - 0.05)
         # Sinon : zone optimale, ne rien changer
 
         if self._judge_temp != old_temp:
-            log.info("Judge temp adapted: %.2f → %.2f (var=%.4f, window=%d)",
+            log.info("Judge temp adapted: %.2f â†’ %.2f (var=%.4f, window=%d)",
                      old_temp, self._judge_temp, var, n)
 
         self._temp_history.append(self._judge_temp)
@@ -756,7 +835,7 @@ class JudgePipeline:
 
             if data and "summaries" in data:
                 sums = data["summaries"]
-                # Normalize keys: "draft_1" → "1", "draft_2" → "2", etc.
+                # Normalize keys: "draft_1" â†’ "1", "draft_2" â†’ "2", etc.
                 normalized = {}
                 for k, v in sums.items():
                     clean_key = k.replace("draft_", "").replace("Draft_", "").replace("Draft ", "").strip()
@@ -777,16 +856,22 @@ class JudgePipeline:
         recent_winners: List[str],
         valid_agents: List[str],
     ) -> Optional[JudgeVerdict]:
-        """Appelle le juge 8B local."""
-        prompt = _build_judge_prompt(summaries, main_tension, recent_winners,
-                                     disable_antistagnation=self._disable_antistagnation)
+        """Appelle le juge."""
+        if self._judge_language == "en":
+            prompt = _build_judge_prompt_en(summaries, main_tension, recent_winners,
+                                            disable_antistagnation=self._disable_antistagnation)
+            sys_msg = "You are an impartial judge. Respond only in JSON."
+        else:
+            prompt = _build_judge_prompt(summaries, main_tension, recent_winners,
+                                         disable_antistagnation=self._disable_antistagnation)
+            sys_msg = "Tu es un juge impartial. Reponds uniquement en JSON."
         t0 = time.monotonic()
 
         try:
             response = _ollama_chat_smart(
                 model=self._judge_model,
                 messages=[
-                    {"role": "system", "content": "Tu es un juge impartial. Reponds uniquement en JSON."},
+                    {"role": "system", "content": sys_msg},
                     {"role": "user", "content": prompt},
                 ],
                 options={
@@ -839,7 +924,7 @@ class JudgePipeline:
 
     @staticmethod
     def _normalize_agent_id(raw: str, valid_agents: List[str]) -> Optional[str]:
-        """Normalize winner variants: 'Agent B', 'Draft 1', 'agent_b', ' B ', 'b', '1' → match."""
+        """Normalize winner variants: 'Agent B', 'Draft 1', 'agent_b', ' B ', 'b', '1' â†’ match."""
         cleaned = (raw.strip().upper()
                    .replace("AGENT", "").replace("DRAFT", "")
                    .replace("_", "").replace(" ", ""))
@@ -870,7 +955,7 @@ class JudgePipeline:
         raw["_audit"] = audit
 
         if audit["judge_failed"]:
-            log.warning("judge: judge_failed — no valid winner (raw='%s')",
+            log.warning("judge: judge_failed â€” no valid winner (raw='%s')",
                         data.get("winner", ""))
         elif audit["fixes"]:
             log.info("judge: normalized with fixes: %s", audit["fixes"])
@@ -887,8 +972,8 @@ class JudgePipeline:
 
     def _fallback_verdict(self, valid_agents: List[str]) -> JudgeVerdict:
         """Verdict de fallback quand le juge echoue.
-        winner=None — tick comptabilise comme judge_failed.
-        signals=None → l'orchestrateur utilisera _aggregate_signals(turns)
+        winner=None â€” tick comptabilise comme judge_failed.
+        signals=None â†’ l'orchestrateur utilisera _aggregate_signals(turns)
         au lieu de constantes artificielles [0, 0, 0.5, 0]."""
         return JudgeVerdict(
             winner=None,

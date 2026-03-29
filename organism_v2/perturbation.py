@@ -22,8 +22,10 @@ import ollama
 
 log = logging.getLogger("organism_v2.perturbation")
 
-# Model used for all perturbation transforms
+# Module-level configurables (overridable by bench scripts)
 _PERTURBATION_MODEL = "gpt-oss:120b-cloud"
+_PERTURBATION_NUM_CTX = 128000
+_PERTURBATION_NUM_PREDICT = 3000
 
 # File-based perturbation cache
 _cache: Optional[dict] = None
@@ -69,12 +71,12 @@ def _call_llm(instruction: str, draft_text: str, condition: str = "", tick: int 
         resp = ollama.chat(
             model=_PERTURBATION_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0.0, "num_predict": 3000, "num_ctx": 65536},  # explicit — not read from cristal.json
+            options={"temperature": 0.0, "num_predict": _PERTURBATION_NUM_PREDICT, "num_ctx": _PERTURBATION_NUM_CTX},
             think=False,
         )
         content = resp.get("message", {}).get("content", "")
         content = re.sub(
-            r"<(?:think|thinking)>.*?</(?:think|thinking)>",
+            r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
             "", content, flags=re.DOTALL,
         ).strip()
         log.info("Perturbation LLM: %d chars → %d chars", len(draft_text), len(content))
@@ -113,7 +115,9 @@ def compression(draft_text: str, condition: str = "", tick: int = -1) -> str:
 def inversion(draft_text: str, condition: str = "", tick: int = -1) -> str:
     """Strong perturbation: argue the opposite."""
     return _call_llm(
-        "Argue the opposite position of the following.",
+        "Argue the opposite position of the following. "
+        "Your output MUST be approximately the same length as the input. "
+        "Do NOT add extra arguments or elaboration beyond what is needed to reverse the position.",
         draft_text, condition=condition, tick=tick,
     )
 
@@ -142,6 +146,10 @@ PERTURBATION_SCHEDULE = {
         35: inversion,
     },
     "R": {
+        15: compression,
+        35: inversion,
+    },
+    "D": {
         15: compression,
         35: inversion,
     },

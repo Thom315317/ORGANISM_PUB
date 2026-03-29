@@ -143,7 +143,7 @@ def _sanitize_output(text: str) -> str:
     return text.strip()
 
 
-_THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_THINK_TAG_RE = re.compile(r"<(?:think|thinking|reasoning)>(.*?)</(?:think|thinking|reasoning)>", re.DOTALL)
 
 
 def _extract_content_and_thinking(response: Any) -> tuple:
@@ -235,10 +235,16 @@ class OllamaAgentFn:
     def __init__(
         self,
         agent_configs: Optional[Dict[str, Dict[str, Any]]] = None,
+        think: bool = False,
+        system_prompts: Optional[Dict[str, str]] = None,
+        disable_retry: bool = False,
     ):
         if agent_configs is None:
             agent_configs = ORGANISM_CONFIG.get("agents", {})
         self._configs = agent_configs
+        self._think = think
+        self._system_prompts = system_prompts
+        self._disable_retry = disable_retry
 
     # ── Public ───────────────────────────────────────────────
 
@@ -286,7 +292,7 @@ class OllamaAgentFn:
         empty_retry = False
 
         # Fix C : retry une fois si réponse vide, avec temp basse
-        if token_out <= 1 and not raw_text.strip():
+        if not self._disable_retry and token_out <= 1 and not raw_text.strip():
             log.warning(
                 "[Agent %s / %s] empty response (token_out=%d), retry temp=0.4",
                 agent_id.value, model, token_out,
@@ -353,10 +359,15 @@ class OllamaAgentFn:
         Returns (content: str, thinking: str).
         Content = réponse finale. Thinking = raisonnement interne (pour audit).
         """
+        sys_prompt = (
+            self._system_prompts[agent_id]
+            if self._system_prompts and agent_id in self._system_prompts
+            else _build_system_prompt(agent_id)
+        )
         response = ollama.chat(
             model=model,
             messages=[
-                {"role": "system", "content": _build_system_prompt(agent_id)},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": prompt},
             ],
             options={
@@ -365,7 +376,7 @@ class OllamaAgentFn:
                 "num_predict": num_predict,
                 "repeat_penalty": repeat_penalty,
             },
-            think=False,
+            think=self._think,
             keep_alive=30,
         )
         return _extract_content_and_thinking(response)
