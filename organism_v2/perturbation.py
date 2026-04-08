@@ -153,6 +153,14 @@ PERTURBATION_SCHEDULE = {
         15: compression,
         35: inversion,
     },
+    "D2": {
+        15: compression,
+        35: inversion,
+    },
+    "D3": {
+        15: compression,
+        35: inversion,
+    },
     "F": {
         10: compression,
         20: inversion,

@@ -887,29 +887,41 @@ class Orchestrator:
         """
         sections = []
 
+        _en = getattr(self, '_language', 'fr') == 'en'
+
         # 1. Messages utilisateur — PRIORITÉ ABSOLUE
         if self._user_messages:
-            sections.append("Réponds à cette question :")
+            sections.append("Answer this question:" if _en else "Réponds à cette question :")
             for msg in self._user_messages:
                 sections.append(f">>> {msg}")
             sections.append("")  # ligne vide
 
         # 2. Mode — une phrase, pas un paragraphe
-        mode_instruction = {
-            Mode.IDLE: "Réfléchis brièvement sur un sujet qui t'intéresse.",
-            Mode.EXPLORE: "Explore une nouvelle piste. Propose une hypothèse.",
-            Mode.DEBATE: "Conteste ou défends une idée. Prends position.",
-            Mode.IMPLEMENT: "Propose quelque chose de concret : un plan, une synthèse, une formulation.",
-            Mode.CONSOLIDATE: "Résume ce qui a été établi. Identifie les points d'accord.",
-            Mode.RECOVER: "Pause. 1 phrase max.",
-        }
-        sections.append(mode_instruction.get(mode, "Pense."))
+        if _en:
+            mode_instruction = {
+                Mode.IDLE: "Think briefly about a topic that interests you.",
+                Mode.EXPLORE: "Explore a new angle. Propose a hypothesis.",
+                Mode.DEBATE: "Challenge or defend an idea. Take a position.",
+                Mode.IMPLEMENT: "Propose something concrete: a plan, a synthesis, a formulation.",
+                Mode.CONSOLIDATE: "Summarize what has been established. Identify points of agreement.",
+                Mode.RECOVER: "Pause. 1 sentence max.",
+            }
+        else:
+            mode_instruction = {
+                Mode.IDLE: "Réfléchis brièvement sur un sujet qui t'intéresse.",
+                Mode.EXPLORE: "Explore une nouvelle piste. Propose une hypothèse.",
+                Mode.DEBATE: "Conteste ou défends une idée. Prends position.",
+                Mode.IMPLEMENT: "Propose quelque chose de concret : un plan, une synthèse, une formulation.",
+                Mode.CONSOLIDATE: "Résume ce qui a été établi. Identifie les points d'accord.",
+                Mode.RECOVER: "Pause. 1 phrase max.",
+            }
+        sections.append(mode_instruction.get(mode, "Think." if _en else "Pense."))
 
         # 3. Status — une ligne
         if params.status == AgentStatus.LEAD:
-            sections.append("Tu mènes la réflexion.")
+            sections.append("You lead the discussion." if _en else "Tu mènes la réflexion.")
         elif params.status == AgentStatus.OPPOSE:
-            sections.append("Conteste ce qui a été dit. Si c'est dangereux ou faux, dis VETO.")
+            sections.append("Challenge what has been said. If it is dangerous or false, say VETO." if _en else "Conteste ce qui a été dit. Si c'est dangereux ou faux, dis VETO.")
         # Support = pas d'instruction spéciale
 
         # 4. Contexte — les derniers échanges (dédupliqués)
@@ -917,19 +929,21 @@ class Orchestrator:
             deduped = self._dedupe_evidence(pack)
             if deduped:
                 sections.append("")
-                sections.append("Contexte récent :")
+                sections.append("Recent context:" if _en else "Contexte récent :")
                 sections.append("\n".join(deduped))
 
         # 5. Facts du World Model (si non vide)
         facts = self._wm.get_facts()
         if facts:
             facts_text = "\n".join(f"- {f.content}" for f in facts[:8])
-            sections.append(f"\nFaits établis :\n{facts_text}")
+            sections.append(("\nEstablished facts:\n" if _en else "\nFaits établis :\n") + facts_text)
 
         # 6. Bootstrap si premier tick sans contexte ni user
         if not pack or not pack.slots:
             if not self._user_messages:
                 sections.append(
+                    "\nThis is the beginning. Pick a topic that interests you and "
+                    "formulate a first thought." if _en else
                     "\nC'est le début. Choisis un sujet qui t'intéresse et "
                     "formule une première réflexion."
                 )

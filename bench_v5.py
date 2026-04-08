@@ -225,6 +225,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     orch = Orchestrator(mr=mr, l0r=l0r, scheduler=sched, world_model=wm,
                         agent_fn=agent_fn, judge_pipeline=judge_pipeline,
                         condition=orch_condition, theories=theories, stem=stem, bench_mode=True)
+    orch._language = 'en'  # Force English prompts in orchestrator
 
     metrics = TickMetrics()
     perturbation_log = []

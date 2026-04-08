@@ -42,29 +42,34 @@ Runs 7 conditions x N seeds x 80 ticks.
 
 5 distinct families. No shared weights or architecture.
 
-### Bench V5/V6 (English, cross-language replication)
+### Bench V7 (final — English, 8 conditions, 12 seeds)
 
-Standalone bench scripts at project root: `bench_v5.py`, `bench_v6.py`.
+Standalone bench script: `bench_v6.py` with `--output-dir runs/bench_v7`.
 
-- **Language**: English (prompts, injections, system prompts)
-- **Condition D** added: 3 clones of Agent A + RandomJudge — controls for "just averaging"
-- **CONDITIONS**: A, B, C, D, E, R (6 conditions)
-- **--qualify flag**: 50-tick qualification test (C seed 42) with GO/NO-GO report
-- **OllamaAgentFn**: new `think` and `system_prompts` parameters for per-bench configuration
-- **perturbation.py**: `_PERTURBATION_NUM_CTX` and `_PERTURBATION_NUM_PREDICT` configurable
+- **Language**: English everywhere (orchestrator `_language='en'`, system prompts, injections, judge)
+- **8 conditions**: A, B, C, D, D2, D3, E, R
+- **12 seeds**: 42, 123, 456, 7, 77, 777, 1, 99, 2024, 314, 2025, 8
+- **Total**: 96 runs, 80 ticks each
 - **Seed-first loop order**: all conditions per seed before next seed
-- **5 new metrics**: collapse_loss, wasserstein_dist, jensen_shannon_div, diversity_momentum, intrinsic_dim
 
-| | V5 (lineup 1) | V6 (lineup 2) |
-|---|---|---|
-| Agent A | gpt-oss:120b-cloud | glm-5:cloud |
-| Agent B | deepseek-v3.2:cloud | kimi-k2.5:cloud |
-| Agent C | nemotron-3-super:cloud | minimax-m2.7:cloud |
-| Judge | gemini-3-flash-preview:cloud | gemini-3-flash-preview:cloud |
-| Perturbation | minimax-m2.7:cloud | nemotron-3-super:cloud |
-| D' clones | gpt-oss:120b-cloud ×3 | glm-5:cloud ×3 |
-| num_ctx | 128000 | 128000 (judge: 200000) |
-| num_predict | 3000 (judge: 4000) | 3000 (judge: 4000) |
+| Role | Model | Family |
+|------|-------|--------|
+| Agent A | glm-5:cloud | Zhipu |
+| Agent B | kimi-k2.5:cloud | Moonshot |
+| Agent C | minimax-m2.7:cloud | MiniMax |
+| Judge | gemini-3-flash-preview:cloud | Google |
+| Perturbation | nemotron-3-super:cloud | NVIDIA |
+| D clones | minimax-m2.7:cloud x3 | MiniMax |
+| D2 clones | kimi-k2.5:cloud x3 | Moonshot |
+| D3 clones | glm-5:cloud x3 | Zhipu |
+
+6 distinct families. num_ctx=128000 agents, 131072 judge. num_predict=3000 agents, 4000 judge.
+
+### Embedding robustness (BGE-M3)
+
+All sim_curves recomputed with BAAI/bge-m3 (1024-dim) as second embedding model.
+Results in `results_bgem3.json` per run. Script: `tools/reanalyze_bgem3.py`.
+All gradients (C>E, C~R, D2>D3) confirmed robust across both embedding models.
 
 ### Length bias mitigation (V5/V6)
 
@@ -96,17 +101,16 @@ Standalone bench scripts at project root: `bench_v5.py`, `bench_v6.py`.
 python organism_v2/bench_v2.py --conditions A,B,C,E,R \
   --seeds 42,123,456,7,77,777 --ticks 80 --output-dir runs/bench_v4/
 
-# Full bench V5 (English, lineup 1, 36 runs)
-python bench_v5.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+# Bench V7 (final, English, 96 runs)
+python bench_v6.py --conditions A,B,C,D,D2,D3,E,R \
+    --seeds 42,123,456,7,77,777,1,99,2024,314,2025,8 \
+    --ticks 80 --output-dir runs/bench_v7
 
-# Full bench V6 (English, lineup 2, 36 runs)
-python bench_v6.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
-
-# Qualification test (50 ticks, C seed 42)
-python bench_v5.py --qualify
+# BGE-M3 embedding robustness reanalysis
+python tools/reanalyze_bgem3.py --runs-dir runs/bench_v7/
 
 # Dry-run
-python bench_v5.py --dry-run --conditions A,C,D --seeds 42
+python bench_v6.py --dry-run --conditions A,C,D --seeds 42 --output-dir runs/bench_v7
 ```
 
 ## Viewer (`viewer_v3.py`)

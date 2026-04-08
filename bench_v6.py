@@ -56,12 +56,14 @@ JUDGE_MODEL_V6 = "gemini-3-flash-preview:cloud"
 SUMMARIZER_MODEL_V6 = "deepseek-v3.2:cloud"
 PERTURBATION_MODEL_V6 = "nemotron-3-super:cloud"
 D_PRIME_MODEL_V6 = "minimax-m2.7:cloud"  # 3 clones for condition D
+D2_MODEL_V6 = "kimi-k2.5:cloud"  # 3 clones for condition D2
+D3_MODEL_V6 = "glm-5:cloud"  # 3 clones for condition D3
 
 # ── Constants ─────────────────────────────────────────────────────
 
 DEFAULT_TICKS = 80
 DEFAULT_SEEDS = [42, 123, 456, 7, 77, 777]
-CONDITIONS = ["A", "B", "C", "D", "E", "R"]
+CONDITIONS = ["A", "B", "C", "D", "D2", "D3", "E", "R"]
 WARMUP_TICKS = 5
 
 DEFAULT_INJECTIONS: Dict[int, str] = {
@@ -132,7 +134,9 @@ CONDITION_DESCRIPTIONS = {
     "A": "standard multi-agent pipeline, no perturbation — baseline",
     "B": "multi-agent + neutral perturbation (rephrase) at t15/t35 — controls for injection effect",
     "C": "multi-agent + strong perturbation (compression/inversion) at t15/t35 — measures resilience",
-    "D": "3 clones of Agent A + random winner + strong perturbation — controls for 'just averaging' (no real diversity)",
+    "D": "3 clones of Agent A (minimax-m2.7) + random winner + strong perturbation — controls for averaging with weak model",
+    "D2": "3 clones of Agent B (kimi-k2.5) + random winner + strong perturbation — controls for averaging with strong model",
+    "D3": "3 clones of Agent A (glm-5) + random winner + strong perturbation — controls for averaging with medium model",
     "E": "single-agent (Agent A) + strong perturbation + no-LLM judge — controls for multi-agent contribution",
     "R": "multi-agent + strong perturbation + random winner — isolates geometric smoothing from competitive selection",
 }
@@ -161,8 +165,9 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     is_single = condition == "E"
 
     # ── Agent function ──
-    if condition == "D":
-        d_prime_cfg = {"model": D_PRIME_MODEL_V6, "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2}
+    if condition in ("D", "D2", "D3"):
+        clone_model = {"D": D_PRIME_MODEL_V6, "D2": D2_MODEL_V6, "D3": D3_MODEL_V6}[condition]
+        d_prime_cfg = {"model": clone_model, "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2}
         dup_configs = {"A": dict(d_prime_cfg), "B": dict(d_prime_cfg), "C": dict(d_prime_cfg)}
         if not dry_mode:
             from organism.agent_wrapper import OllamaAgentFn
@@ -189,7 +194,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     judge_pipeline = None
     if is_single:
         judge_pipeline = NoLLMSingleDraftJudge()
-    elif condition in ("R", "D"):
+    elif condition in ("R", "D", "D2", "D3"):
         if not dry_mode:
             try:
                 from organism.judge import JudgePipeline
@@ -225,6 +230,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     orch = Orchestrator(mr=mr, l0r=l0r, scheduler=sched, world_model=wm,
                         agent_fn=agent_fn, judge_pipeline=judge_pipeline,
                         condition=orch_condition, theories=theories, stem=stem, bench_mode=True)
+    orch._language = 'en'  # Force English prompts in orchestrator
 
     metrics = TickMetrics()
     perturbation_log = []
@@ -317,7 +323,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
         "sim_curves": sim_curves,
         "judge_temp_history": judge_temp_hist,
         "model_lineup": {
-            "agents": {k: v["model"] for k, v in MODEL_CONFIGS_V6.items()},
+            "agents": {k: v["model"] for k, v in dup_configs.items()} if condition in ("D", "D2", "D3") else {k: v["model"] for k, v in MODEL_CONFIGS_V6.items()},
             "judge": JUDGE_MODEL_V6,
             "perturbation": PERTURBATION_MODEL_V6,
         },
@@ -331,7 +337,9 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
             "antistagnation": "Disabled for all conditions.",
             "judge_temperature": "Fixed at 0.5.",
             "perturbation_model": PERTURBATION_MODEL_V6,
-            "condition_D": "3 clones " + D_PRIME_MODEL_V6 + " + random winner. Tests averaging without diversity.",
+            "condition_D": "3 clones " + D_PRIME_MODEL_V6 + " + random winner. Tests averaging without diversity (weak model).",
+            "condition_D2": "3 clones " + D2_MODEL_V6 + " + random winner. Tests averaging without diversity (strong model).",
+            "condition_D3": "3 clones " + D3_MODEL_V6 + " + random winner. Tests averaging without diversity (medium model).",
             "strip_thinking": "Applied to all agent drafts before judge/embedding/L0R.",
             "summarizer": "Disabled — judge receives raw drafts.",
         },

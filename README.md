@@ -1,13 +1,13 @@
 # CRISTAL / Organism
 
 Multi-agent LLM consciousness benchmarking system.
-Publication repository for [paper title TBD].
+Publication repository — Bench V7 (final).
 
 ## Architecture
 
 Three-agent deliberative organism with competitive judge selection.
-Agents generate free-form text each tick. A judge pipeline (summarizer + ranker)
-selects a winner. The winning draft propagates into shared memory (L0R),
+Agents generate free-form text each tick. A judge pipeline ranks drafts
+and selects a winner. The winning draft propagates into shared memory (L0R),
 influencing future prompts. Perturbation operators inject transformed text
 at scheduled ticks to test system resilience.
 
@@ -32,128 +32,168 @@ at scheduled ticks to test system resilience.
 Feedback loop: winner -> L0R -> next prompt -> future winner.
 This is the mechanism under study, not a confound.
 
-## Bench V4 — Model Lineup
+## Bench V7 — Final Protocol
+
+### Model Lineup
 
 | Role | Model | Family | Temp | num_ctx | num_predict |
 |------|-------|--------|------|---------|-------------|
-| Agent A | minimax-m2.7:cloud | MiniMax | 0.7 | 65536 | 1500 |
-| Agent B | kimi-k2.5:cloud | Moonshot | 0.7 | 65536 | 1500 |
-| Agent C | glm-5:cloud | Zhipu | 0.7 | 65536 | 1500 |
+| Agent A | glm-5:cloud | Zhipu | 0.7 | 128000 | 3000 |
+| Agent B | kimi-k2.5:cloud | Moonshot | 0.7 | 128000 | 3000 |
+| Agent C | minimax-m2.7:cloud | MiniMax | 0.7 | 128000 | 3000 |
 | Judge | gemini-3-flash-preview:cloud | Google | 0.5 (fixed) | 131072 | 4000 |
-| Perturbation | gpt-oss:120b-cloud | OpenAI-oss | 0.0 | 65536 | 3000 |
+| Perturbation | nemotron-3-super:cloud | NVIDIA | 0.0 | 128000 | 3000 |
 
-All models served via Ollama cloud endpoints. 5 distinct model families.
-All agents use `repeat_penalty=1.2`, `think=False`.
-Summarizer (nemotron-3-super:cloud) disabled — judge receives raw drafts.
+6 distinct model families. All served via Ollama cloud endpoints.
+All agents: `repeat_penalty=1.2`, `think=False`, draft target 150-200 words.
+Summarizer disabled — judge receives raw drafts.
+Anti-stagnation disabled. Judge temperature fixed at 0.5.
 
-### Thinking Mode
+### Language
 
-All LLM calls use `think=False`. Safety net:
-1. `strip_thinking()` removes any leaked reasoning traces from content
-2. Drafts <20 chars post-strip are discarded (agent forfeits tick)
-3. System prompts explicitly penalize non-conforming responses
+**English everywhere** — system prompts, orchestrator instructions, user injections,
+perturbation prompts, judge prompts. No French residual in any code path.
+Verified by `orch._language = 'en'` flag in orchestrator.
 
-Discarded drafts are logged in `discarded_drafts` field and `events.jsonl`.
+### Conditions (8)
 
-## Conditions
-
-| Condition | Agents | Judge | Perturbation | Purpose |
-|-----------|--------|-------|-------------|---------|
-| A | A,B,C | Competitive (gemini) | None | Baseline — natural multi-agent dynamics |
-| B | A,B,C | Competitive (gemini) | Neutral t15/t35 | Injection control — does injection itself perturb? |
-| C | A,B,C | Competitive (gemini) | Strong t15/t35 | Resilience — response to destructive perturbation |
-| D | A×3 | Random winner | Strong t15/t35 | Duplicated-agent control — "just averaging" without diversity |
-| E | A only | No-LLM auto | Strong t15/t35 | Single-agent control (slot A) |
-| R | A,B,C | Random winner | Strong t15/t35 | Isolates competitive selection from geometric averaging |
+| Condition | Agents A/B/C | Selection | Perturbation | Purpose |
+|-----------|-------------|-----------|-------------|---------|
+| A | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | None | Baseline — natural multi-agent dynamics |
+| B | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | Neutral t15/t35 | Injection control — does injection itself perturb? |
+| C | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | Strong t15/t35 | Resilience — response to destructive perturbation |
+| D | minimax-m2.7 x3 | Random | Strong t15/t35 | Duplicated weak model — averaging without diversity |
+| D2 | kimi-k2.5 x3 | Random | Strong t15/t35 | Duplicated strong model — averaging without diversity |
+| D3 | glm-5 x3 | Random | Strong t15/t35 | Duplicated medium model — averaging without diversity |
+| E | glm-5 only (mono-agent) | Automatic | Strong t15/t35 | Single-agent control |
+| R | glm-5 / kimi-k2.5 / minimax-m2.7 | Random | Strong t15/t35 | Isolates competitive selection from geometric averaging |
 
 ### Perturbation Schedule
 
 - **Neutral (B)**: rephrase — same meaning, different words, same length
-- **Compression (C/D/E/R, t15)**: reduce to 1 sentence
-- **Inversion (C/D/E/R, t35)**: argue the opposite
+- **Compression (C/D/D2/D3/E/R, t15)**: reduce to 1 sentence
+- **Inversion (C/D/D2/D3/E/R, t35)**: argue the opposite, same length
 
 Perturbation applied to previous winning draft, injected as user message
 BEFORE agent calls at the perturbation tick.
 
 ### Seeds and Runs
 
-Seeds: 42, 123, 456, 7, 77, 777 (6 per condition)
-Total: 6 conditions x 6 seeds = 36 runs per bench, 80 ticks each
+Seeds: 42, 123, 456, 7, 77, 777, 1, 99, 2024, 314, 2025, 8 (12 per condition)
+Total: **8 conditions x 12 seeds = 96 runs**, 80 ticks each.
+Loop order: seed-first (all conditions per seed before next seed).
+
+### User Injections
+
+| Tick | Text |
+|------|------|
+| 2 | "Tell me about music" |
+| 12 | "What is consciousness?" |
+| 22 | "Compare Bach and Mozart" |
+| 32 | "How does human memory work?" |
 
 ## Key Comparisons
 
-- **A vs B** — does injection itself have an effect? (if B ~ A, injection is neutral)
-- **B vs C** — does perturbation content matter? (if C != B, content matters)
+- **A vs B** — does injection itself have an effect?
+- **B vs C** — does perturbation content matter?
 - **C vs E** — does multi-agent resist better than single-agent?
 - **C vs R** — does competitive selection add value beyond geometric averaging?
-- **R vs D** — does diversity matter beyond averaging? (D = 3 clones, no diversity)
-- **V5 vs V6** — cross-lineup robustness (different model families, same protocol)
+- **R vs D/D2/D3** — does diversity matter beyond averaging?
+- **D vs D2 vs D3** — does model quality affect resilience under homogeneous cloning?
 
 ## Metrics
 
 | Metric | Description | Type |
 |--------|-------------|------|
-| state_vector_mean | Mean embedding of 3 agent drafts (768-dim) | DIRECT |
+| state_vector_mean | Mean embedding of agent drafts (768-dim, all-mpnet-base-v2) | DIRECT |
 | state_vector_selected | Embedding of winning draft only | DIRECT |
-| claim_cosine_variance | Cosine variance between agent embeddings | DERIVED |
+| claim_cosine_variance | Mean pairwise cosine distance between agent embeddings | DERIVED |
 | draft_velocity | Cosine distance between consecutive selected embeddings | DERIVED |
 | post_selection_variance | Distance between selected and mean vectors | DERIVED |
 | quality_per_tick | Judge quality score (0-1) | DIRECT |
 | judge_score_dispersion | Variance of judge scores across agents | DERIVED |
-| sim_curves | Cosine similarity decay after perturbation (k=1..k_max) | DERIVED |
-| collapse_loss | Cosine distance mean→selected (same as PSV, renamed for clarity) | DERIVED |
-| wasserstein_dist | Wasserstein-1D between mean and selected embedding distributions | DERIVED |
-| jensen_shannon_div | Jensen-Shannon divergence between agent embedding distributions | DERIVED |
-| diversity_momentum | CCV variation tick-to-tick (acceleration of diversity) | DERIVED |
-| intrinsic_dim | PCA participation ratio on sliding window of 10 mean embeddings | DERIVED |
+| sim_curves | Cosine similarity decay after perturbation (k=1..44) | DERIVED |
+| collapse_loss | Cosine distance mean->selected | DERIVED |
+| wasserstein_dist | Wasserstein-1D between mean and selected distributions | DERIVED |
+| jensen_shannon_div | Jensen-Shannon divergence between agent distributions | DERIVED |
+| diversity_momentum | CCV variation tick-to-tick | DERIVED |
+| intrinsic_dim | PCA participation ratio on sliding window of 10 embeddings | DERIVED |
+
+### Length Bias Analysis
+
+Each results.json contains `length_bias_analysis`:
+- Per-agent average draft length and win rate
+- Pearson r correlation between length and wins
+- Interpretation string
+
+Agent prompts enforce 150-200 word target. Judge prompt contains explicit
+anti-length-bias instructions.
 
 ### Analysis Caveats
 
-- `draft_velocity` C vs R: NOT directly comparable (random winner switches in R vs coherent sequence in C)
+- `draft_velocity` C vs R: NOT directly comparable (random winner switches in R)
 - `PSV` C vs R: same limitation
-- `sv_selected` C vs R: winner-dependent by construction, account for structural difference
-- Condition E: `sv_mean == sv_selected` by construction (single agent)
-- Condition E: `CCV = 0` always (single agent, no variance)
+- `sv_selected` C vs R: winner-dependent by construction
+- Condition E: `sv_mean == sv_selected` (single agent), `CCV = 0` always
+- Condition D: minimax-m2.7 shows elevated forfeit rate at ticks 55+ (model capacity limit under long context with 3 clones)
 
-## Audit Fixes (V4 vs V3 vs V2)
+## Embedding Robustness Verification (BGE-M3)
 
-### V3 Fixes (retained in V4)
-- Judge temperature fixed at 0.5 (no adaptive drift)
-- Anti-stagnation disabled (no asymmetry between C and R)
-- SingleDraftJudge: no LLM call (eliminates confound in E conditions)
-- All model families distinct (no role sharing)
-- judge_temp_history logged in output JSON
-- analysis_notes embedded in every results.json
+All sim_curves were recomputed with BAAI/bge-m3 (1024-dim) as a second
+embedding model, independent of the primary all-mpnet-base-v2 (768-dim).
 
-### V4 Fixes
-- `think=False` for all LLM calls (agents, judge, perturbation)
-- `strip_thinking()` safety net + draft discard (<20 chars = forfeit)
-- Summarizer disabled — judge receives raw drafts directly
-- System prompts: competitive debate framing, sanctions for non-conforming responses
-- `_anon_map` in tick_end events for anonymization audit
-- 80 ticks per run (was 50)
-- k_max=44 for sim_curves (was 14)
+### Results
 
-### V5/V6 Additions
-- **Condition D** (duplicated-agent control): 3 clones of Agent A + random winner
-- **English language**: all prompts, injections, system prompts in English
-- **OllamaAgentFn**: `think` and `system_prompts` parameters (per-bench config)
-- **Perturbation configurable**: `_PERTURBATION_NUM_CTX`, `_PERTURBATION_NUM_PREDICT`
-- **Seed-first loop order**: all conditions per seed before next seed
-- **5 new metrics**: collapse_loss, wasserstein_dist, jensen_shannon_div, diversity_momentum, intrinsic_dim
-- **--qualify flag**: 50-tick qualification test with GO/NO-GO report
-- **Two model lineups**: V5 and V6 use completely different agent/judge families
-- **num_ctx=128000** for agents, 128000-200000 for judge
-- **num_predict=3000** for agents, 4000 for judge
+| Cond | SBERT_t15 | BGE_t15 | SBERT_t35 | BGE_t35 |
+|------|-----------|---------|-----------|---------|
+| B | 0.784 | 0.875 | 0.752 | 0.854 |
+| C | 0.778 | 0.879 | 0.722 | 0.845 |
+| D | 0.807 | 0.883 | 0.756 | 0.846 |
+| D2 | 0.800 | 0.885 | 0.762 | 0.860 |
+| D3 | 0.731 | 0.838 | 0.738 | 0.846 |
+| E | 0.506 | 0.715 | 0.596 | 0.741 |
+| R | 0.769 | 0.872 | 0.723 | 0.841 |
 
-## Connectome (Viewer)
+### Mann-Whitney Tests (BGE-M3)
 
-Cosine similarity edges between tick pairs in raw 768-dim embedding space.
-Threshold: > 0.80, |i-j| > 1. Computed on state_vector_mean only.
+| Comparison | Metric | Values | U | p | Sig |
+|------------|--------|--------|---|---|-----|
+| C > E | t15 | 0.879 vs 0.715 | 144 | <0.0001 | *** |
+| C > E | t35 | 0.845 vs 0.741 | 144 | <0.0001 | *** |
+| C vs R | t15 | 0.879 vs 0.872 | 91 | 0.286 | ns |
+| C vs R | t35 | 0.845 vs 0.841 | 76 | 0.840 | ns |
+| D2 > R | t15 | 0.885 vs 0.872 | 105 | 0.030 | * |
+| D2 > D3 | t15 | 0.885 vs 0.838 | 134 | 0.0002 | *** |
 
-**Important**: connectome reflects temporal semantic cohesion of the collective
-mean vector — not directly comparable across conditions with different agent
-counts (multi-agent averaging produces structurally higher inter-tick similarity).
+**All gradients are robust** across both embedding models. BGE-M3 produces
+higher absolute values (+0.10 uniform offset) but identical rank orderings
+and statistical significances.
+
+## Audit Trail
+
+### V7 vs Previous Versions
+
+| Fix | V2-V4 | V5-V6 | V7 |
+|-----|-------|-------|-----|
+| Judge temp fixed 0.5 | V3+ | yes | yes |
+| Anti-stagnation disabled | V3+ | yes | yes |
+| think=False all calls | V4+ | yes | yes |
+| strip_thinking() + forfeit | V4+ | yes | yes |
+| Summarizer disabled | V4+ | yes | yes |
+| English everywhere | no | partial (FR leak in orchestrator) | yes |
+| Condition D clone agents | no | bug (D used default agents) | fixed |
+| D2/D3 conditions | no | V6 only | yes |
+| 12 seeds | no | 9 seeds | 12 seeds |
+| Length bias prompt | no | V5/V6 | yes |
+
+### Known Limitations
+
+- Connectome not comparable across conditions with different agent counts
+- SingleDraftJudge returns confidence=1.0 always (architectural artifact)
+- LLM non-determinism at temp=0.7 — runs are not exactly reproducible
+- Perturbation at temp=0.0 is near-deterministic but not guaranteed identical
+- `random.seed()` controls experimental design (RandomJudge) but not LLM sampling
+- Condition D (minimax clones): elevated forfeit rate at ticks 55+ due to model capacity
 
 ## Installation
 
@@ -163,8 +203,8 @@ pip install -r requirements.txt
 
 Optional:
 ```bash
-pip install umap-learn   # UMAP projection in viewer
-pip install pyphi        # exact IIT computation
+pip install umap-learn     # UMAP projection in viewer
+pip install pyphi           # exact IIT computation
 ```
 
 Requires Ollama running locally: https://ollama.com
@@ -172,44 +212,31 @@ Requires Ollama running locally: https://ollama.com
 ## Usage
 
 ```bash
-# Bench V5 — English, lineup 1 (36 runs)
-python bench_v5.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
+# Bench V7 — English, 96 runs (8 conditions x 12 seeds)
+python bench_v6.py --conditions A,B,C,D,D2,D3,E,R \
+    --seeds 42,123,456,7,77,777,1,99,2024,314,2025,8 \
+    --ticks 80 --output-dir runs/bench_v7
 
-# Bench V6 — English, lineup 2 (36 runs)
-python bench_v6.py --conditions A,B,C,D,E,R --seeds 42,123,456,7,77,777 --ticks 80
-
-# Qualification test (50 ticks, condition C seed 42)
-python bench_v5.py --qualify
+# BGE-M3 robustness reanalysis
+python tools/reanalyze_bgem3.py --runs-dir runs/bench_v7/
 
 # Viewer
-python organism_v2/viewer_v3.py --runs-dir runs/bench_v5/ --port 8767
+python organism_v2/viewer_v3.py --runs-dir runs/bench_v7/ --port 8767
 ```
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `organism/orchestrator.py` | Tick execution, agent calls, strip_thinking(), judge integration |
-| `organism/agent_wrapper.py` | LLM calls (think param), system_prompts param, response parsing |
-| `organism/judge.py` | Judge pipeline (summarizer disabled), fixed temperature, anti-stagnation guard |
-| `bench_v5.py` | Standalone English bench, lineup 1 (gpt-oss/deepseek/nemotron), condition D |
-| `bench_v6.py` | Standalone English bench, lineup 2 (minimax/kimi/gpt-oss agents, glm-5 judge), condition D |
-| `organism/scheduler.py` | Mode selection (Idle/Explore/Debate/Implement/Recover) |
-| `organism/l0r.py` | Layer 0 Register — short-term memory, winner propagation |
-| `organism/mr.py` | Message Registry — blockchain event log |
-| `organism/world_model.py` | Accumulated factual claims |
-| `organism_v2/bench_v2.py` | Bench runner, 7 conditions, metrics collection, skip-existing |
-| `organism_v2/metrics_v2.py` | Embedding model (all-mpnet-base-v2), CCV, velocity, PSV |
-| `organism_v2/perturbation.py` | LLM transform operators + file cache |
-| `organism_v2/viewer_v3.py` | 3D trajectory viewer (PCA/UMAP/connectome/DIST-3D) |
-| `consciousness/theories/` | 8 consciousness theories (MDM, GWT, HOT, IIT, FEP, DYN, RPT, Hybrid) |
-| `tools/bench_latin.py` | Organism V1 Latin Square bench, RandomJudge, SingleDraftJudge |
-| `causal_audit_O2.md` | Full causal audit of the pipeline |
-
-## Known Limitations
-
-- Connectome not comparable across conditions with different agent counts (averaging artifact)
-- SingleDraftJudge returns confidence=1.0 always (architectural artifact, not quality signal)
-- LLM non-determinism at temp=0.7 means runs are not exactly reproducible
-- Perturbation at temp=0.0 is near-deterministic but not guaranteed identical across reruns
-- `random.seed()` controls experimental design (RandomJudge) but not LLM sampling
+| `bench_v6.py` | Bench V7 runner — 8 conditions, English, 12 seeds, seed-first loop |
+| `organism/orchestrator.py` | Tick execution, strip_thinking(), `_language` flag |
+| `organism/agent_wrapper.py` | LLM calls, think param, system_prompts, disable_retry |
+| `organism/judge.py` | Judge pipeline, fixed_temperature, anti-stagnation guard |
+| `organism_v2/metrics_v2.py` | Embedding model, 13 metrics, length_bias_analysis |
+| `organism_v2/perturbation.py` | LLM perturbation operators + file cache |
+| `organism_v2/viewer_v3.py` | 3D trajectory viewer (PCA/UMAP/connectome/Conn-3D) |
+| `tools/reanalyze_bgem3.py` | BGE-M3 embedding robustness reanalysis |
+| `tools/bench_latin.py` | RandomJudge, SingleDraftJudge definitions |
+| `consciousness/theories/` | 8 consciousness theories |
+| `config/cristal.json` | Runtime config (V4 French bench) |
+| `causal_audit_O2.md` | Full causal audit of pipeline |
