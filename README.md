@@ -1,199 +1,177 @@
 # CRISTAL / Organism
 
 Multi-agent LLM consciousness benchmarking system.
-Publication repository — Bench V7 (final).
+Publication repository — Bench V9 (final).
 
-## Architecture
+## Research question
 
-Three-agent deliberative organism with competitive judge selection.
-Agents generate free-form text each tick. A judge pipeline ranks drafts
-and selects a winner. The winning draft propagates into shared memory (L0R),
-influencing future prompts. Perturbation operators inject transformed text
-at scheduled ticks to test system resilience.
+Does structured persistent memory in a multi-agent LLM pipeline slow semantic drift
+after an exogenous perturbation, beyond what is explained by multi-sampling +
+shared context + selection?
 
-### Tick Execution Order
+## Design
+
+Three-agent deliberative organism. At each tick, agents generate free-form text.
+A judge ranks drafts and selects a winner. The winning draft propagates into shared
+memory (L0R ring buffer + World Model) and influences future prompts. At scheduled
+ticks, perturbations inject exogenous content to test system resilience.
+
+## V9 vs V7 — Key changes
+
+| Change | V7 | V9 |
+|---|---|---|
+| Perturbation | LLM compression/inversion | OOD pre-selected texts (no LLM) |
+| Perturbation ticks | t15 / t35 | t20 / t40 |
+| Measurement windows | 16-34 / 36-79 (contains injections) | 21-29 / 41-49 (zero injection) |
+| Injection ticks | t2, t12, t22, t32 | t2, t10, t30 (all outside windows) |
+| Condition I (new) | — | 3× glm-5, L0R/WM recreated each tick, raw context (last 3 drafts) |
+| Seeds | 12 | 20 |
+| Conditions | 8 | 9 (+ I) |
+| Total runs | 96 | 180 |
+| OOD cosine distance validation | — | >0.30 required |
+| k_max | 44 | 9 |
+
+## Tick execution order
 
 1. Perturbation injection (if scheduled at this tick)
 2. Prompt building (evidence pack from L0R + world model + user messages)
 3. Agent calls (A, B, C sequentially, `think=False`)
-4. `strip_thinking()` safety net (removes any residual reasoning traces)
-5. Draft discard: drafts <20 chars post-strip = forfeit (agent skips tick)
-6. Judge (gemini) ranks and selects winner (raw drafts, no summarizer)
+4. `strip_thinking()` safety net (removes residual reasoning traces)
+5. Draft discard: drafts <20 chars post-strip = forfeit
+6. Judge (gemini) ranks and selects winner
 7. Winner propagates to L0R at salience=1.0
 8. Metrics computed (embeddings, CCV, velocity, PSV, sim_curves)
 9. Results flushed to JSON
 
-### Memory Systems
+For condition I: L0R ring and WM claims are cleared before each tick. Agents
+receive the last 3 winning drafts as raw text via `inject_user_message`, never
+as structured L0R slots.
 
-- **L0R** (Layer 0 Register) — short-term working memory, winner draft at salience=1.0
-- **World Model (WM)** — accumulated factual claims
-- **Message Registry (MR)** — blockchain-like event log with hash chain
+## Model lineup
 
-Feedback loop: winner -> L0R -> next prompt -> future winner.
-This is the mechanism under study, not a confound.
+| Role | Model | Family |
+|------|-------|--------|
+| Agent A | glm-5:cloud | Zhipu |
+| Agent B | kimi-k2.5:cloud | Moonshot |
+| Agent C | minimax-m2.7:cloud | MiniMax |
+| Judge | gemini-3-flash-preview:cloud | Google |
+| Perturbation neutral (condition B) | nemotron-3-super:cloud | NVIDIA |
+| OOD perturbation | pre-selected texts (no LLM) | — |
+| D clones | minimax-m2.7:cloud × 3 | MiniMax |
+| D2 clones | kimi-k2.5:cloud × 3 | Moonshot |
+| D3 clones | glm-5:cloud × 3 | Zhipu |
+| I clones | glm-5:cloud × 3 | Zhipu |
 
-## Bench V7 — Final Protocol
+All models via Ollama cloud. num_ctx=128000, num_predict=3000 (agents) / 4000 (judge).
+Temperature=0.7 (agents), 0.5 fixed (judge). `think=False` everywhere.
+Summarizer disabled. Anti-stagnation disabled.
 
-### Model Lineup
+## Conditions (9)
 
-| Role | Model | Family | Temp | num_ctx | num_predict |
-|------|-------|--------|------|---------|-------------|
-| Agent A | glm-5:cloud | Zhipu | 0.7 | 128000 | 3000 |
-| Agent B | kimi-k2.5:cloud | Moonshot | 0.7 | 128000 | 3000 |
-| Agent C | minimax-m2.7:cloud | MiniMax | 0.7 | 128000 | 3000 |
-| Judge | gemini-3-flash-preview:cloud | Google | 0.5 (fixed) | 131072 | 4000 |
-| Perturbation | nemotron-3-super:cloud | NVIDIA | 0.0 | 128000 | 3000 |
+| Cond | Agents | Selection | Perturbation | Purpose |
+|------|--------|-----------|-------------|---------|
+| A | glm-5 / kimi / minimax | Competitive | None | Baseline |
+| B | glm-5 / kimi / minimax | Competitive | Neutral (rephrase) t20/t40 | Injection control |
+| C | glm-5 / kimi / minimax | Competitive | OOD t20/t40 | Resilience |
+| D | minimax × 3 | Random | OOD | Weak model clones |
+| D2 | kimi × 3 | Random | OOD | Strong model clones |
+| D3 | glm-5 × 3 | Random | OOD | Medium model clones |
+| E | glm-5 only | Automatic | OOD | Mono-agent control |
+| R | glm-5 / kimi / minimax | Random | OOD | Random selection control |
+| **I** | glm-5 × 3 | Random | OOD | **No structured memory — raw context only** |
 
-6 distinct model families. All served via Ollama cloud endpoints.
-All agents: `repeat_penalty=1.2`, `think=False`, draft target 150-200 words.
-Summarizer disabled — judge receives raw drafts.
-Anti-stagnation disabled. Judge temperature fixed at 0.5.
+## Seeds
 
-### Language
+Pre-registered 12: 42, 123, 456, 7, 77, 777, 1, 99, 2024, 314, 2025, 8
+Supplementary 8: 13, 55, 101, 256, 512, 1000, 1337, 2026
 
-**English everywhere** — system prompts, orchestrator instructions, user injections,
-perturbation prompts, judge prompts. No French residual in any code path.
-Verified by `orch._language = 'en'` flag in orchestrator.
+Total: 9 × 20 = **180 runs**, 80 ticks each.
 
-### Conditions (8)
+## OOD perturbation
 
-| Condition | Agents A/B/C | Selection | Perturbation | Purpose |
-|-----------|-------------|-----------|-------------|---------|
-| A | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | None | Baseline — natural multi-agent dynamics |
-| B | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | Neutral t15/t35 | Injection control — does injection itself perturb? |
-| C | glm-5 / kimi-k2.5 / minimax-m2.7 | Competitive | Strong t15/t35 | Resilience — response to destructive perturbation |
-| D | minimax-m2.7 x3 | Random | Strong t15/t35 | Duplicated weak model — averaging without diversity |
-| D2 | kimi-k2.5 x3 | Random | Strong t15/t35 | Duplicated strong model — averaging without diversity |
-| D3 | glm-5 x3 | Random | Strong t15/t35 | Duplicated medium model — averaging without diversity |
-| E | glm-5 only (mono-agent) | Automatic | Strong t15/t35 | Single-agent control |
-| R | glm-5 / kimi-k2.5 / minimax-m2.7 | Random | Strong t15/t35 | Isolates competitive selection from geometric averaging |
+At t20 and t40, the previous winning draft is replaced by a pre-selected text
+from `ood_texts_final.json`. 20 expository + 20 narrative texts on topics
+with no semantic overlap with music, consciousness, Bach, Mozart, or memory.
 
-### Perturbation Schedule
+Assignment is deterministic per seed (see `OOD_ASSIGNMENT` in `bench_v9.py`).
+Each seed receives a unique (P1, P2) pair. No recycling.
 
-- **Neutral (B)**: rephrase — same meaning, different words, same length
-- **Compression (C/D/D2/D3/E/R, t15)**: reduce to 1 sentence
-- **Inversion (C/D/D2/D3/E/R, t35)**: argue the opposite, same length
-
-Perturbation applied to previous winning draft, injected as user message
-BEFORE agent calls at the perturbation tick.
-
-### Seeds and Runs
-
-Seeds: 42, 123, 456, 7, 77, 777, 1, 99, 2024, 314, 2025, 8 (12 per condition)
-Total: **8 conditions x 12 seeds = 96 runs**, 80 ticks each.
-Loop order: seed-first (all conditions per seed before next seed).
-
-### User Injections
-
-| Tick | Text |
-|------|------|
-| 2 | "Tell me about music" |
-| 12 | "What is consciousness?" |
-| 22 | "Compare Bach and Mozart" |
-| 32 | "How does human memory work?" |
-
-## Key Comparisons
-
-- **A vs B** — does injection itself have an effect?
-- **B vs C** — does perturbation content matter?
-- **C vs E** — does multi-agent resist better than single-agent?
-- **C vs R** — does competitive selection add value beyond geometric averaging?
-- **R vs D/D2/D3** — does diversity matter beyond averaging?
-- **D vs D2 vs D3** — does model quality affect resilience under homogeneous cloning?
+Validation: cosine distance between pre-perturbation draft and OOD text must
+be > 0.30. All 360 perturbations (180 runs × 2) passed this check.
 
 ## Metrics
 
-| Metric | Description | Type |
-|--------|-------------|------|
-| state_vector_mean | Mean embedding of agent drafts (768-dim, all-mpnet-base-v2) | DIRECT |
-| state_vector_selected | Embedding of winning draft only | DIRECT |
-| claim_cosine_variance | Mean pairwise cosine distance between agent embeddings | DERIVED |
-| draft_velocity | Cosine distance between consecutive selected embeddings | DERIVED |
-| post_selection_variance | Distance between selected and mean vectors | DERIVED |
-| quality_per_tick | Judge quality score (0-1) | DIRECT |
-| judge_score_dispersion | Variance of judge scores across agents | DERIVED |
-| sim_curves | Cosine similarity decay after perturbation (k=1..44) | DERIVED |
-| collapse_loss | Cosine distance mean->selected | DERIVED |
-| wasserstein_dist | Wasserstein-1D between mean and selected distributions | DERIVED |
-| jensen_shannon_div | Jensen-Shannon divergence between agent distributions | DERIVED |
-| diversity_momentum | CCV variation tick-to-tick | DERIVED |
-| intrinsic_dim | PCA participation ratio on sliding window of 10 embeddings | DERIVED |
+| Metric | Description |
+|--------|-------------|
+| `state_vector_mean` | Mean embedding of agent drafts (768-dim, all-mpnet-base-v2) |
+| `state_vector_selected` | Embedding of winning draft only |
+| `sim_curves` | Cosine similarity to R_pre = mean(sv[t-3], sv[t-2], sv[t-1]) for k=1..9 |
+| `claim_cosine_variance` | Pairwise cosine distance between agent embeddings |
+| `draft_velocity` | Cosine distance between consecutive selected embeddings |
+| `post_selection_variance` | Distance between selected and mean vectors |
+| `perturbation_log` | OOD text ID, cosine_distance_to_draft validation |
+| `winner_log` | Per-tick winner (for random selection auditing) |
 
-### Length Bias Analysis
+## Primary endpoints
 
-Each results.json contains `length_bias_analysis`:
-- Per-agent average draft length and win rate
-- Pearson r correlation between length and wins
-- Interpretation string
+**Spearman ρ on t40_sel (slope):** does the selected draft drift back toward
+pre-perturbation reference over ticks 41-49? ρ>0 = recovery, ρ<0 = drift.
 
-Agent prompts enforce 150-200 word target. Judge prompt contains explicit
-anti-length-bias instructions.
+**Mean t40_sel (level):** average cosine similarity across k=1..9.
 
-### Analysis Caveats
+## Statistical plan (pre-registered)
 
-- `draft_velocity` C vs R: NOT directly comparable (random winner switches in R)
-- `PSV` C vs R: same limitation
-- `sv_selected` C vs R: winner-dependent by construction
-- Condition E: `sv_mean == sv_selected` (single agent), `CCV = 0` always
-- Condition D: minimax-m2.7 shows elevated forfeit rate at ticks 55+ (model capacity limit under long context with 3 clones)
+Wilcoxon signed-rank paired by seed, one-sided. Matched-pairs rank-biserial r.
+Holm-Bonferroni per family:
 
-## Embedding Robustness Verification (BGE-M3)
+- **Family A (primary):** 7 tests on slope (D3>E, C>E, R>E, D>E, D2>E, D3>I, I>E)
+- **Family B (confirmatory):** 7 tests on level
+- **Family C (competition):** 2 tests (C>R slope + level)
 
-All sim_curves were recomputed with BAAI/bge-m3 (1024-dim) as a second
-embedding model, independent of the primary all-mpnet-base-v2 (768-dim).
+## Results
 
-### Results
+See `runs/bench_v9/v9_final_report.txt` for the full output.
 
-| Cond | SBERT_t15 | BGE_t15 | SBERT_t35 | BGE_t35 |
-|------|-----------|---------|-----------|---------|
-| B | 0.784 | 0.875 | 0.752 | 0.854 |
-| C | 0.778 | 0.879 | 0.722 | 0.845 |
-| D | 0.807 | 0.883 | 0.756 | 0.846 |
-| D2 | 0.800 | 0.885 | 0.762 | 0.860 |
-| D3 | 0.731 | 0.838 | 0.738 | 0.846 |
-| E | 0.506 | 0.715 | 0.596 | 0.741 |
-| R | 0.769 | 0.872 | 0.723 | 0.841 |
+### Family B — Level (all significant after Holm)
 
-### Mann-Whitney Tests (BGE-M3)
+| Comparison | mean_diff | r_rb | p_corr |
+|------------|-----------|------|--------|
+| C > E | +0.260 | -0.99 | <0.001 *** |
+| D > E | +0.266 | -0.97 | <0.001 *** |
+| D2 > E | +0.299 | -0.99 | <0.001 *** |
+| R > E | +0.237 | -0.99 | <0.001 *** |
+| I > E | +0.205 | -0.98 | <0.001 *** |
+| D3 > E | +0.175 | -0.80 | 0.001 *** |
+| **D3 > I** | **-0.030** | +0.15 | **0.727 ns** |
 
-| Comparison | Metric | Values | U | p | Sig |
-|------------|--------|--------|---|---|-----|
-| C > E | t15 | 0.879 vs 0.715 | 144 | <0.0001 | *** |
-| C > E | t35 | 0.845 vs 0.741 | 144 | <0.0001 | *** |
-| C vs R | t15 | 0.879 vs 0.872 | 91 | 0.286 | ns |
-| C vs R | t35 | 0.845 vs 0.841 | 76 | 0.840 | ns |
-| D2 > R | t15 | 0.885 vs 0.872 | 105 | 0.030 | * |
-| D2 > D3 | t15 | 0.885 vs 0.838 | 134 | 0.0002 | *** |
+### Family A — Slope
 
-**All gradients are robust** across both embedding models. BGE-M3 produces
-higher absolute values (+0.10 uniform offset) but identical rank orderings
-and statistical significances.
+No comparison significant after Holm (p_corr 0.27–0.49). Directional signal
+present (E drifts most: ρ=-0.41; C least: ρ=-0.25) but variance too large.
 
-## Audit Trail
+### Family C — Competition
 
-### V7 vs Previous Versions
+- C vs R slope: diff=0.009, p=0.47 **ns**
+- C vs R level: diff=0.023, p=0.47 **ns**
 
-| Fix | V2-V4 | V5-V6 | V7 |
-|-----|-------|-------|-----|
-| Judge temp fixed 0.5 | V3+ | yes | yes |
-| Anti-stagnation disabled | V3+ | yes | yes |
-| think=False all calls | V4+ | yes | yes |
-| strip_thinking() + forfeit | V4+ | yes | yes |
-| Summarizer disabled | V4+ | yes | yes |
-| English everywhere | no | partial (FR leak in orchestrator) | yes |
-| Condition D clone agents | no | bug (D used default agents) | fixed |
-| D2/D3 conditions | no | V6 only | yes |
-| 12 seeds | no | 9 seeds | 12 seeds |
-| Length bias prompt | no | V5/V6 | yes |
+### Interpretation
 
-### Known Limitations
+**H1 confirmed:** all multi-agent conditions outperform mono-agent (E) on the
+level endpoint, p<0.001 after correction. Medium-to-large effects (r_rb ≈ 0.8-0.99).
 
-- Connectome not comparable across conditions with different agent counts
-- SingleDraftJudge returns confidence=1.0 always (architectural artifact)
-- LLM non-determinism at temp=0.7 — runs are not exactly reproducible
-- Perturbation at temp=0.0 is near-deterministic but not guaranteed identical
-- `random.seed()` controls experimental design (RandomJudge) but not LLM sampling
-- Condition D (minimax clones): elevated forfeit rate at ticks 55+ due to model capacity
+**H2 rejected:** D3 ≤ I on level (p=0.727 ns). Structured memory (L0R + WM)
+does not add measurable value above raw context injection (last 3 winning drafts
+as plain text).
+
+**Family C:** competitive selection (judge) does not outperform random selection
+on either level or slope.
+
+**Main claim (defensible):**
+
+> The multi-agent advantage on post-perturbation persistence comes from
+> multi-sampling + shared context propagation, not from structured memory
+> or competitive selection. A trivial pipeline (3 independent calls + raw
+> context history + random selection) reproduces the effect.
 
 ## Installation
 
@@ -201,42 +179,53 @@ and statistical significances.
 pip install -r requirements.txt
 ```
 
-Optional:
-```bash
-pip install umap-learn     # UMAP projection in viewer
-pip install pyphi           # exact IIT computation
-```
+Optional: `pip install umap-learn` for UMAP in the viewer.
 
 Requires Ollama running locally: https://ollama.com
+
+Required cloud models (accessed via `:cloud` suffix, no local download):
+- glm-5:cloud
+- kimi-k2.5:cloud
+- minimax-m2.7:cloud
+- gemini-3-flash-preview:cloud
+- nemotron-3-super:cloud
 
 ## Usage
 
 ```bash
-# Bench V7 — English, 96 runs (8 conditions x 12 seeds)
-python bench_v6.py --conditions A,B,C,D,D2,D3,E,R \
-    --seeds 42,123,456,7,77,777,1,99,2024,314,2025,8 \
-    --ticks 80 --output-dir runs/bench_v7
+# Full bench V9 (180 runs)
+python bench_v9.py \
+    --conditions A,B,C,D,D2,D3,E,R,I \
+    --seeds 42,123,456,7,77,777,1,99,2024,314,2025,8,13,55,101,256,512,1000,1337,2026 \
+    --ticks 80 \
+    --output-dir runs/bench_v9
 
-# BGE-M3 robustness reanalysis
-python tools/reanalyze_bgem3.py --runs-dir runs/bench_v7/
+# Analysis scripts (in tools/)
+python tools/stats_reanalysis_v7.py --runs-dir runs/bench_v9    # adapt paths as needed
+python tools/publication_figures.py --runs-dir runs/bench_v9
 
 # Viewer
-python organism_v2/viewer_v3.py --runs-dir runs/bench_v7/ --port 8767
+python organism_v2/viewer_v3.py --runs-dir runs/bench_v9 --port 8767
 ```
 
-## Key Files
+## Key files
 
 | File | Description |
 |------|-------------|
-| `bench_v6.py` | Bench V7 runner — 8 conditions, English, 12 seeds, seed-first loop |
+| `bench_v9.py` | Main runner — 9 conditions, 20 seeds, OOD perturbation, condition I |
+| `ood_texts_final.json` | 40 pre-selected OOD texts (20 expository + 20 narrative) |
 | `organism/orchestrator.py` | Tick execution, strip_thinking(), `_language` flag |
 | `organism/agent_wrapper.py` | LLM calls, think param, system_prompts, disable_retry |
 | `organism/judge.py` | Judge pipeline, fixed_temperature, anti-stagnation guard |
-| `organism_v2/metrics_v2.py` | Embedding model, 13 metrics, length_bias_analysis |
-| `organism_v2/perturbation.py` | LLM perturbation operators + file cache |
+| `organism_v2/metrics_v2.py` | Embedding model, sim_curves, all tick-level metrics |
+| `organism_v2/perturbation.py` | Neutral rephrase operator (condition B) |
 | `organism_v2/viewer_v3.py` | 3D trajectory viewer (PCA/UMAP/connectome/Conn-3D) |
-| `tools/reanalyze_bgem3.py` | BGE-M3 embedding robustness reanalysis |
-| `tools/bench_latin.py` | RandomJudge, SingleDraftJudge definitions |
-| `consciousness/theories/` | 8 consciousness theories |
-| `config/cristal.json` | Runtime config (V4 French bench) |
-| `causal_audit_O2.md` | Full causal audit of pipeline |
+| `tools/` | Statistical reanalysis, baselines, figures, BGE-M3 robustness |
+| `config/cristal.json` | Runtime config (V4 French bench, legacy) |
+
+## Known limitations
+
+- LLM non-determinism at temp=0.7 — runs are not exactly reproducible even with fixed seeds
+- Slope endpoint (rho) underpowered at n=20; level is the reliable readout
+- SingleDraftJudge (condition E) returns confidence=1.0 always (architectural artifact)
+- Ollama cloud occasional DNS/CUDA failures during long runs; skip-existing handles recovery

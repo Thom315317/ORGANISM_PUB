@@ -257,8 +257,7 @@ def run_single(
     # ── Theories + STEM ──
     theories = []
     try:
-        from consciousness.theories import ALL_THEORIES
-        theories = [T() for T in ALL_THEORIES]
+        pass  # consciousness theories removed from publication build
     except Exception:
         pass
 

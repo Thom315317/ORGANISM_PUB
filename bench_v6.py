@@ -214,8 +214,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
 
     theories = []
     try:
-        from consciousness.theories import ALL_THEORIES
-        theories = [T() for T in ALL_THEORIES]
+        pass  # consciousness theories removed from publication build
     except Exception:
         pass
 

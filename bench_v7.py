@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-bench_v5.py — Organism V5 Bench Runner (English, lineup 1)
+bench_v7.py — Organism V7 Bench Runner (English, final)
 ============================================================
-Standalone English bench. Models: minimax/kimi/gemini agents, glm-5 judge, gpt-oss perturbation.
-Conditions: A, B, C, E, E_B, E_C, R, D (duplicated-agent control).
-num_ctx=200000, num_predict=4000, think=False.
+8 conditions (A, B, C, D, D2, D3, E, R) x 12 seeds, 80 ticks.
+Models: glm-5/kimi-k2.5/minimax-m2.7 agents, gemini judge, nemotron perturbation.
+num_ctx=128000, num_predict=3000, think=False.
 
 Usage:
-    python organism_v2/bench_v5.py --conditions A,B,C,E,R,D --seeds 42,123,456,7,77,777 --ticks 80
-    python organism_v2/bench_v5.py --dry-run --conditions A,D --seeds 42
+    python bench_v7.py --conditions A,B,C,D,D2,D3,E,R --seeds 42,123,456,7,77,777,1,99,2024,314,2025,8 --ticks 80
+    python bench_v7.py --dry-run --conditions A,D --seeds 42
 """
 from __future__ import annotations
 
@@ -43,25 +43,27 @@ from tools.bench_latin import (
 from organism_v2.perturbation import get_perturbation, set_cache_path
 from organism_v2.metrics_v2 import load_embedding_model, TickMetrics
 
-log = logging.getLogger("bench_v5")
+log = logging.getLogger("bench_v6")
 
-# ── Model lineup V5 ──────────────────────────────────────────────
+# ── Model lineup V6 ──────────────────────────────────────────────
 
-MODEL_CONFIGS_V5 = {
-    "A": {"model": "gpt-oss:120b-cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
-    "B": {"model": "cogito-2.1:671b-cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
-    "C": {"model": "minimax-m2.1:cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
+MODEL_CONFIGS_V6 = {
+    "A": {"model": "glm-5:cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
+    "B": {"model": "kimi-k2.5:cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
+    "C": {"model": "minimax-m2.7:cloud", "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2},
 }
-JUDGE_MODEL_V5 = "gemini-3-flash-preview:cloud"
-SUMMARIZER_MODEL_V5 = "qwen3-coder:480b-cloud"
-PERTURBATION_MODEL_V5 = "glm-5:cloud"
-D_PRIME_MODEL_V5 = "gpt-oss:120b-cloud"  # 3 clones for condition D
+JUDGE_MODEL_V6 = "gemini-3-flash-preview:cloud"
+SUMMARIZER_MODEL_V6 = "deepseek-v3.2:cloud"
+PERTURBATION_MODEL_V6 = "nemotron-3-super:cloud"
+D_PRIME_MODEL_V6 = "minimax-m2.7:cloud"  # 3 clones for condition D
+D2_MODEL_V6 = "kimi-k2.5:cloud"  # 3 clones for condition D2
+D3_MODEL_V6 = "glm-5:cloud"  # 3 clones for condition D3
 
 # ── Constants ─────────────────────────────────────────────────────
 
 DEFAULT_TICKS = 80
 DEFAULT_SEEDS = [42, 123, 456, 7, 77, 777]
-CONDITIONS = ["A", "B", "C", "D", "E", "R"]
+CONDITIONS = ["A", "B", "C", "D", "D2", "D3", "E", "R"]
 WARMUP_TICKS = 5
 
 DEFAULT_INJECTIONS: Dict[int, str] = {
@@ -132,7 +134,9 @@ CONDITION_DESCRIPTIONS = {
     "A": "standard multi-agent pipeline, no perturbation — baseline",
     "B": "multi-agent + neutral perturbation (rephrase) at t15/t35 — controls for injection effect",
     "C": "multi-agent + strong perturbation (compression/inversion) at t15/t35 — measures resilience",
-    "D": "3 clones of Agent A + random winner + strong perturbation — controls for 'just averaging' (no real diversity)",
+    "D": "3 clones of Agent A (minimax-m2.7) + random winner + strong perturbation — controls for averaging with weak model",
+    "D2": "3 clones of Agent B (kimi-k2.5) + random winner + strong perturbation — controls for averaging with strong model",
+    "D3": "3 clones of Agent A (glm-5) + random winner + strong perturbation — controls for averaging with medium model",
     "E": "single-agent (Agent A) + strong perturbation + no-LLM judge — controls for multi-agent contribution",
     "R": "multi-agent + strong perturbation + random winner — isolates geometric smoothing from competitive selection",
 }
@@ -157,12 +161,13 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     sched = Scheduler()
     wm = WorldModel(mr=mr)
 
-    jm = judge_model or JUDGE_MODEL_V5
+    jm = judge_model or JUDGE_MODEL_V6
     is_single = condition == "E"
 
     # ── Agent function ──
-    if condition == "D":
-        d_prime_cfg = {"model": D_PRIME_MODEL_V5, "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2}
+    if condition in ("D", "D2", "D3"):
+        clone_model = {"D": D_PRIME_MODEL_V6, "D2": D2_MODEL_V6, "D3": D3_MODEL_V6}[condition]
+        d_prime_cfg = {"model": clone_model, "temperature": 0.7, "num_ctx": 128000, "num_predict": 3000, "repeat_penalty": 1.2}
         dup_configs = {"A": dict(d_prime_cfg), "B": dict(d_prime_cfg), "C": dict(d_prime_cfg)}
         if not dry_mode:
             from organism.agent_wrapper import OllamaAgentFn
@@ -173,7 +178,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
         target = AgentId["A"]
         if not dry_mode:
             from organism.agent_wrapper import OllamaAgentFn
-            single_configs = {"A": dict(MODEL_CONFIGS_V5["A"])}
+            single_configs = {"A": dict(MODEL_CONFIGS_V6["A"])}
             agent_fn = _make_single_agent_fn(
                 OllamaAgentFn(agent_configs=single_configs, think=False, system_prompts=ENGLISH_SYSTEM_PROMPTS, disable_retry=True), target)
         else:
@@ -181,7 +186,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     else:
         if not dry_mode:
             from organism.agent_wrapper import OllamaAgentFn
-            agent_fn = OllamaAgentFn(agent_configs=dict(MODEL_CONFIGS_V5), think=False, system_prompts=ENGLISH_SYSTEM_PROMPTS, disable_retry=True)
+            agent_fn = OllamaAgentFn(agent_configs=dict(MODEL_CONFIGS_V6), think=False, system_prompts=ENGLISH_SYSTEM_PROMPTS, disable_retry=True)
         else:
             agent_fn = dry_agent_fn
 
@@ -189,7 +194,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
     judge_pipeline = None
     if is_single:
         judge_pipeline = NoLLMSingleDraftJudge()
-    elif condition in ("R", "D"):
+    elif condition in ("R", "D", "D2", "D3"):
         if not dry_mode:
             try:
                 from organism.judge import JudgePipeline
@@ -303,7 +308,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
             judge_temp_hist = orch._judge._real._temp_history
 
     output = {
-        "bench_version": "v5",
+        "bench_version": "v6",
         "bench_language": "en",
         "condition": condition,
         "condition_description": CONDITION_DESCRIPTIONS.get(condition, ""),
@@ -317,12 +322,12 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
         "sim_curves": sim_curves,
         "judge_temp_history": judge_temp_hist,
         "model_lineup": {
-            "agents": {k: v["model"] for k, v in MODEL_CONFIGS_V5.items()},
-            "judge": JUDGE_MODEL_V5,
-            "perturbation": PERTURBATION_MODEL_V5,
+            "agents": {k: v["model"] for k, v in dup_configs.items()} if condition in ("D", "D2", "D3") else {k: v["model"] for k, v in MODEL_CONFIGS_V6.items()},
+            "judge": JUDGE_MODEL_V6,
+            "perturbation": PERTURBATION_MODEL_V6,
         },
         "analysis_notes": {
-            "bench_version": "v5",
+            "bench_version": "v6",
             "language": "English",
             "think": "False for all agents. Judge uses auto-detect.",
             "judge_language": "en",
@@ -330,8 +335,10 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
             "num_predict": "3000 agents / 4000 judge.",
             "antistagnation": "Disabled for all conditions.",
             "judge_temperature": "Fixed at 0.5.",
-            "perturbation_model": PERTURBATION_MODEL_V5,
-            "condition_D": "3 clones " + D_PRIME_MODEL_V5 + " + random winner. Tests averaging without diversity.",
+            "perturbation_model": PERTURBATION_MODEL_V6,
+            "condition_D": "3 clones " + D_PRIME_MODEL_V6 + " + random winner. Tests averaging without diversity (weak model).",
+            "condition_D2": "3 clones " + D2_MODEL_V6 + " + random winner. Tests averaging without diversity (strong model).",
+            "condition_D3": "3 clones " + D3_MODEL_V6 + " + random winner. Tests averaging without diversity (medium model).",
             "strip_thinking": "Applied to all agent drafts before judge/embedding/L0R.",
             "summarizer": "Disabled — judge receives raw drafts.",
         },
@@ -345,7 +352,7 @@ def run_single(condition, seed, total_ticks, output_dir, dry_mode=False, judge_m
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Organism V5 Bench (English, lineup 1)")
+    parser = argparse.ArgumentParser(description="Organism V6 Bench (English, lineup 2)")
     parser.add_argument("--ticks", type=int, default=DEFAULT_TICKS)
     parser.add_argument("--seeds", type=str, default=None)
     parser.add_argument("--conditions", type=str, default=None)
@@ -362,11 +369,11 @@ def main():
 
     # Override perturbation model + params
     import organism_v2.perturbation as _pert
-    _pert._PERTURBATION_MODEL = PERTURBATION_MODEL_V5
+    _pert._PERTURBATION_MODEL = PERTURBATION_MODEL_V6
     _pert._PERTURBATION_NUM_CTX = 128000
     _pert._PERTURBATION_NUM_PREDICT = 3000
 
-    # Override judge ctx — 128K for all
+    # Override judge ctx for glm-5 (200K)
     import organism.judge as _judge_mod
     _judge_mod._JUDGE_CTX = 128000
     _judge_mod._JUDGE_PREDICT = 4000
@@ -381,7 +388,7 @@ def main():
         total_ticks = 10 if dry_mode else args.ticks
         seeds = [int(s.strip()) for s in args.seeds.split(",")] if args.seeds else DEFAULT_SEEDS
         conditions = [c.strip().upper() for c in args.conditions.split(",")] if args.conditions else CONDITIONS
-    output_dir = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "runs" / "bench_v5"
+    output_dir = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "runs" / "bench_v6"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not dry_mode and not check_ollama():
@@ -402,7 +409,7 @@ def main():
     t_global = time.time()
 
     print(f"\n{'='*60}")
-    print(f"  ORGANISM V5 BENCH (English, lineup 1)")
+    print(f"  ORGANISM V6 BENCH (English, lineup 1)")
     print(f"  {len(conditions)} conditions × {len(seeds)} seeds = {total_runs} runs")
     print(f"  {total_ticks} ticks/run")
     print(f"  Output: {output_dir}")
@@ -438,7 +445,7 @@ def main():
 
     elapsed = time.time() - t_global
     print(f"\n{'='*60}")
-    print(f"  V5 BENCH COMPLETE — {completed}/{total_runs} runs in {_format_eta(elapsed)}")
+    print(f"  V6 BENCH COMPLETE — {completed}/{total_runs} runs in {_format_eta(elapsed)}")
     print(f"  Results in: {output_dir}")
     print(f"{'='*60}")
 
@@ -474,7 +481,7 @@ def _print_qualification_report(run_dir: Path):
     forfeit_rate = n_discarded / (n_ticks * 3) if n_ticks > 0 else 0
 
     print(f"\n{'='*60}")
-    print(f"  QUALIFICATION REPORT — V5")
+    print(f"  QUALIFICATION REPORT — V6")
     print(f"{'='*60}")
     print(f"  Ticks completed: {n_ticks}")
     print(f"  Discarded drafts: {n_discarded} ({forfeit_rate:.1%} of all drafts)")
